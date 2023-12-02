@@ -1,0 +1,682 @@
+---
+title: "R Tutorial: Descriptive Statistics 1"
+subtitle: "Frequency tables, summary statistics and corresponding visualization"
+author: 
+  - name: "Philipp Leppert"
+date: "16.10.2020"
+output: 
+  html_document:
+    anchor_sections: false
+    highlight: default
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: false
+    #code_folding: hide
+#bibliography: references.bib 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, fig.align = "center")
+
+# Pakete Layout
+library(details)
+library(klippy)
+
+# Pakete Analyse
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(purrr)
+library(forcats)
+library(ggmosaic)
+library(ggmosaic)
+
+# Required Updates
+#devtools::install_github('haleyjeppson/ggmosaic')
+
+# ggplot theme
+theme_set(theme_bw())
+```
+
+```{r klippy, echo=FALSE, include=TRUE}
+klippy::klippy()
+```
+
+<style>
+#TOC {
+  background: url('https://raw.githubusercontent.com/philippleppert/rpubs/main/DescStats1.png');
+  background-size: 180px 180px;
+  padding-top: 180px !important;
+  background-repeat: no-repeat;
+  background-position: center top;
+}
+</style>
+
+*****
+
+Reading time: `r format(ceiling(wordcountaddin::word_count()/200), nsmall=0)` minutes (`r format(wordcountaddin::word_count(), nsmall=0, big.mark=",")` words)
+
+*****
+
+## 1. Introduction
+
+Before trying to answer scientific questions or making predictions with a (unknown) dataset, you should get familiar with it. At least, this will include an analysis of the data structure and the contained observations. 
+
+* How many variables are there? 
+
+* What is their level of measurement? 
+
+* Do my variables of interest follow a normal distribution or are there clusters in my data I should pay attention to? 
+
+* Are some of my modelling assumptions going to be violated?
+
+The answers to these questions lie in a *description* or *summary* of the data at hand. That's why they are commonly referred to as **descriptive statistics**.
+
+### 1.1 R packages
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(purrr)
+library(forcats)
+library(ggmosaic)
+library(Hmisc)
+library(scales)
+```
+
+### 1.2 Dataset
+
+All practical examples are built around the [Mid-Atlantic Wage Data](https://rdrr.io/cran/ISLR/man/Wage.html){target="_blank"} contained in R package `ISLR`. This dataset contains information about 3,000 male workers in the *Mid-Atlantic* region like their yearly salary and other demographic characteristics. After reading the data, I convert `wage` in full US dollar.
+
+```{r}
+data("Wage", package = "ISLR")
+
+Wage <- Wage %>%
+  mutate(wage = wage*1000)
+```
+
+*****
+
+## 2. The Big Picture 
+
+### 2.1 At first glance {.tabset .tabset-fade .tabset-pills}
+
+After reading the data, the *Wage* dataset can be found in RStudio's `global environment` and displays the number of columns and rows (`3000 obs. of 11 variables`). 
+
+#### dplyr::glimpse
+
+The R package `dplyr` offers the function `glimpse()` which displays more information about the dataset. RStudio's `console` displays all columns (variable names) of the dataset. The column format, called `class`, can be found between the `< >` operators. There are integer columns (`int`), factor columns (`fct`) as well as double columns (`dbl`). For each column some values (rows) are displayed.
+
+```{r}
+Wage %>%
+  glimpse()
+```
+
+#### utils::str
+
+The integrated function `str()` is very similar to `glimpse()`. There are only minor differences like the display of the number of levels for each factor variable.
+
+```{r}
+Wage %>%
+  str()
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 2.2 Qualitative variables 
+
+These variables are typically of class `factor` or `character`. The following representations might apply:
+
+* [Frequency/contingency table](https://en.wikipedia.org/wiki/Contingency_table){target="_blank"}
+
+* [Mosaic plot](https://en.wikipedia.org/wiki/Mosaic_plot){target="_blank"}
+
+* [Bar chart](https://en.wikipedia.org/wiki/Bar_chart){target="_blank"}
+
+*****
+
+### 2.3 Numerical variables
+
+These variable are typically of class `int` or `double`. The following representations might apply:
+
+* [Summary statistics](https://en.wikipedia.org/wiki/Summary_statistics){target="_blank"}
+
+* [Histogram](https://en.wikipedia.org/wiki/Histogram){target="_blank"}
+
+* [Box plot](https://en.wikipedia.org/wiki/Box_plot){target="_blank"}
+
+* [Density plot](https://en.wikipedia.org/wiki/Density_estimation){target="_blank"}
+
+*****
+
+## 3. Exploring Qualitative Variables
+
+In this section we'll discuss **frequency tables**, **bar charts** and **mosaic plots** as a simple but useful way to examine one ore more variables of nominal or ordinal scale. 
+
+### 3.1 One variable {.tabset .tabset-fade .tabset-pills}
+
+The distribution of the respondents' `education` marks the starting point of the following analysis.
+
+#### One-way Table
+
+The integrated function `table()` produces a one-way (frequency) table, which calculates the number of observations (counts) for each level of `education`.
+
+```{r} 
+Wage %>%
+  select(education) %>%
+  table()
+```
+
+#### Bar Chart
+
+The function `geom_bar()` from R package `ggplot2` is used to create a corresponding bar chart. Bald but informative!
+
+```{r}
+ggplot(data = Wage, aes(x=education)) +
+  geom_bar(fill = "white", color = "black") +
+  labs(x = "Education", y = "Number of observations")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 3.2 Two variables {.tabset .tabset-fade .tabset-pills}
+
+Next, I want to gain information about the distribution of the respondents' `education` while taking into account their `race`. 
+
+#### Two-way Table
+
+Supplying the function `table()` with two variables produces a two-way (contingency) table.
+
+```{r}
+Wage %>%
+  select(education, race) %>%
+  table()
+```
+
+#### Bar Chart (fill)
+
+In the bar chart variable `race` might be assigned to argument `fill=`, which *fills* each bar with the levels of `race`.
+
+```{r}
+ggplot(data = Wage, aes(x = education, fill = race)) +
+  geom_bar(color = "black") +
+  labs(x = "Education", y = "Number of observations", fill = "Race")
+```
+
+#### Bar Chart (dodge)
+
+For comparing the respondents' `race` *between* each level of `education`, the arumgent `position` might be altered to `dodge` the bars instead of `stack`ing them. 
+
+```{r}
+ggplot(data = Wage, aes(x = education, fill = race)) +
+  geom_bar(position = "dodge", color = "black") +
+  labs(x = "Education", y = "Number of observations", fill = "Race")
+```
+
+#### Bar Chart (percent) 
+
+The distribution of `race` within each `education` bar can be more precisely assessed by displaying relative percentages instead of counts. This can be achieved by rescaling the y-axis with function `scale_y_continuous()` and using the R package `scales` which offers tailored options for the labeling of the scale. This bar chart is well suited for comparing the respondents' `race` *within* each level of `education`.
+
+```{r}
+ggplot(data = Wage, aes(x = education, fill = race)) +
+  geom_bar(position = "fill", color = "black") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Education", y = "Share", fill = "Race")
+```
+
+#### Mosaic Plot
+
+The mosaic plot is a superior form of visualization in this setting. The contents of a contingency table are displayed in bars which differ in their width according to the respective count. There are many implementations of the mosaic plot - here I am using the function `geom_mosaic` from R package `ggmosaic` which is easily integrated in a ggplot visualization. I removed all labels of `race` from the x-axis and assigned them to the argument `fill =` because they overlap each other and are hardy readable.
+
+```{r}
+ggplot(data = Wage) +
+  geom_mosaic(aes(x = product(education, race), fill = race)) +
+  labs(x = "Race", y = "Education", fill = "Race") +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 3.3 Three variables {.tabset .tabset-fade .tabset-pills}
+
+In addition to `race` let us take into account the respondents' `jobclass` for assessing the distribution of `education`.
+
+#### Three-way Table
+
+Now, the function `table()` creates a contingency table of `education` and `race` for each level of `jobclass`. Extracting information from this form of display is a bit more elaborate ... 
+
+```{r}
+Wage %>%
+  dplyr::select(education, race, jobclass) %>%
+  table()
+```
+
+#### Bar Chart (facet)
+
+The bar chart might be used again by creating stand-alone bar charts for each level of `jobclass` while using separate bars for each level of `race` inside them. The function `facet_grid()`allows to *group* a plot by one or two variables. Here I am using column-wise grouping with argument `cols =`. What I don't like about this bar chart are the duplicated x-axes which are hardly readable because of the levels of `education` ... 
+
+```{r}
+ggplot(data = Wage, aes(x = education, fill = race)) +
+  geom_bar(position = "dodge", color = "black") +
+  facet_grid(cols = vars(jobclass)) +
+  labs(x = "Education", y = "Number of observations", fill = "Race")
+```
+
+#### Bar Chart (flipped)
+
+The function `coord_flip()` solves this problem. Close inspection reveals that the colored bars for `race` are not always on the same height, making a comparison between the levels of `jobclass` unnecessary difficult. This issue is caused by empty cells (= combinations of variables' levels without any observations). For example, there are no respondents with `jobclass` *Industrial*, `race` *Other* and `education` *Advanced Degree* or *College Degree* ...
+
+```{r}
+ggplot(data = Wage, aes(x = education, fill = race)) +
+  geom_bar(position = "dodge", color = "black") +
+  facet_grid(cols = vars(jobclass)) +
+  coord_flip() +
+  labs(x = "Education", y = "Number of observations", fill = "Race")
+```
+
+#### Bar Chart (complete)
+
+This issue is more demanding. At first, each cell (= count per combination of each variable's levels) has to be calculated manually. This can be achieved with the functions `group_by()` and `summarise()` from R package `dplyr`. 
+
+Then `complete()` from R package `tidyr` does the trick by filling in missing categories of a given hierarchical structure with `NA` or other user-defined values. Always check that the argument `nesting` is supplied with the required structure. The argument `stat =` within function `geom_bar()` now has to be supplied with the value `"identity"` since the `"count"`s (number of observations per combination) have already been calculated.
+
+```{r}
+Wage %>%
+  group_by(education, race, jobclass) %>%
+  summarise(count = n()) %>%
+  ungroup() %>%
+  complete(education, nesting(jobclass, race),  fill = list(count = NA)) %>%
+  ggplot(aes(x = education, y = count, fill = race)) +
+  geom_bar(stat = "identity",
+           position = "dodge",
+           color = "black") +
+  facet_grid(cols = vars(jobclass)) +
+  coord_flip() +
+  labs(x = "Education", y = "Number of observations", fill = "Race")
+```
+
+#### Mosaic Plot
+
+The mosaic plot also offers a concise way of displaying information contained in grouped contingency tables. Argument `conds =` has to be supplied with the grouping variable, so in this example the levels of `education` are grouped by the levels of `jobclass`. To ease comparisons with the previous bar chart I reversed the order of the levels of `jobclass` with function `fct_rev()` from R package `forcats`. Looks neat!
+
+```{r}
+Wage %>%
+  mutate(jobclass = fct_rev(jobclass)) %>%
+  ggplot(data = .) +
+  geom_mosaic(aes(
+    x = product(education, race),
+    fill = race,
+    conds = product(jobclass)
+  ),
+  divider = mosaic("v")) +
+  labs(x = "", y = "Education : Jobclass", fill = "Race") +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 3.4 Four variables {.tabset .tabset-fade .tabset-pills}
+
+Generally speaking more variables might be added in the tabular dimension, although the information gain is often quite small because the form of presentation gets confusing Even visualizations with mosaic plots or bar charts hit a wall when supplied with too many variables. Nevertheless, I am adding `health_ins` as grouping variable for my analysis of the distribution of `education`.
+
+#### N-way Table
+
+The function `table()` now prints contingency tables for all combinations of `jobclass` and `health_ins`. Not very pretty but since each variable has only two levels it's still readable. Especially when using the function `ftable()` which flattens the output of function `table()`.
+
+```{r}
+Wage %>%
+  select(education, race, jobclass, health_ins) %>%
+  table() %>% 
+  ftable()
+```
+
+#### Barchart
+
+The function `facet_grid()` offers a second argument (`rows=`) for adding another grouping variable in the bar chart. Use the `labeller =` argument inside function `facet_grid()` in order to display the variable name inside the facets which eases the interpretation of imprecise labels. When using the relative shares of `race` inside the bars of each level of `education` this plot is also quite informative. 
+
+```{r}
+Wage %>%
+  group_by(education, race, jobclass, health_ins) %>%
+  summarise(count = n()) %>%
+  ungroup() %>%
+  complete(education, nesting(jobclass, race, health_ins),  fill = list(count = NA)) %>%
+  ggplot(aes(x=education, y = count, fill = race)) +
+  geom_bar(stat = "identity", position = "fill", color = "black") +
+  facet_grid(rows = vars(health_ins), cols = vars(jobclass),
+             labeller = label_both) +
+  scale_y_continuous(labels = scales::percent) +
+  coord_flip() +
+  labs(x = "Education", y = "Share", fill = "Race")
+```
+
+#### Mosaic Plot
+
+The variable `health_in` might be added inside the `facet_grid()` function.
+
+```{r}
+Wage %>%
+  mutate(jobclass = fct_rev(jobclass)) %>%
+  ggplot(data = .) +
+  geom_mosaic(aes(
+    x = product(education, race),
+    fill = race,
+    conds = product(jobclass)
+  ),
+  divider = mosaic("v")) +
+  facet_grid(cols =  vars(health_ins), labeller = label_both) +
+  labs(x = "", y = "Education : Jobclass", fill = "Race") +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+## 4. Exploring Numeric Variables
+
+Now we'll discuss tools to evaluate variables of interval or continuous scale. I'm going to present classical **summary statistics**, **histograms**, **density plots** as well as **boxplots** for assessing the distribution of these variables.
+
+### 4.1 Simple summary statistics {.tabset .tabset-fade .tabset-pills}
+
+#### base::summary
+
+The function `summary()` displays summary statistics for *all* variables in a dataset. For numeric variables (class `int` or`dbl`) location parameters like the mean and median of the their distribution are printed.
+
+```{r}
+Wage %>%
+  select(age, wage) %>%
+  summary()
+```
+
+#### Hmisc::describe
+
+R package `Hmisc` contains function `describe()` which is also suited for generating summary statistics. Additionally the number of `missing` and `distinct` values are displayed. Regarding numeric variables the five lowest and highest values are shown.
+
+```{r}
+Wage %>%
+  select(age, wage) %>%
+  Hmisc::describe()
+```
+
+#### Histogram
+
+The function `geom_histogram()` from R package `ggplot2` generates a histogram for a single variable. The number of `bins` can be controlled with the eponymous argument.
+
+```{r}
+ggplot(data = Wage, aes(x = wage)) +
+  geom_histogram(fill = "white", color = "black", bins = 50) +
+  scale_x_continuous(labels = scales::dollar) +
+  labs(x = "Wage", y = "Count")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 4.2 Summarizing by a single group {.tabset .tabset-fade .tabset-pills}
+
+Summary statistics of continuously scaled variables might be grouped by variables of nominal, categorical or ordinal scale. Hence, individual summary statistics for each level of the grouping variable will be calculated. In this section I am grouping the summary statistics by `jobclass`.
+
+#### base::tapply
+
+With the integrated function `tapply()` function `summary()` can be (t)applied to all levels of `education` for calculating summary statistics of `wage`. However, summary statistics of more than one variable cannot be caluclated ...
+
+```{r}
+tapply(Wage$wage, Wage$jobclass, summary)
+```
+
+#### purrr::map
+
+The R package `purrr` contains function `map()` which can produce grouped summary statistics for multiple variables. At first, however, I have to `split()` the dataset by the grouping variable. With many variables this form of display gets messy very quickly ...
+
+```{r}
+Wage %>% 
+  select(age, wage, jobclass) %>%
+  split(.$jobclass) %>% 
+  map(summary)
+```
+
+#### Tidy Approach
+
+The functions `group_by()` and `across()` from R package `dplyr` are able to generate grouped summary statistics for multiple variables as well. However, the location parameters have to be calculated manually. Sounds complex but it is not! Sure the coding effort is a bit higher but there is virtually no restriction on the number and type of (location) parameters. For this example I am calculating the mean and median as well as missing values for `wage` and `age`. Then I am using the function `pivot_longer()` from R package `tidyr` to transpose the output in a long format which looks tidy. Finally, just `print()` the data frame.
+
+```{r}
+grouped_summary <- Wage %>%
+  select(wage, age, jobclass) %>%
+  group_by(jobclass) %>%
+  summarise(across(
+    .cols = everything(),
+    .fns = list(
+      mean = mean,
+      median = median,
+      nmiss = ~ sum(is.na(.x))
+    )
+  )) %>%
+  pivot_longer(
+    cols = -jobclass,
+    names_to = c("variable", "parameter"),
+    names_sep = "_",
+    values_to = "value"
+  )
+
+print(grouped_summary)
+```
+
+#### Boxplot
+
+A boxplot is suitable for visualising location parameters especially by groups. The function `geom_boxplot()` from R package `ggplot2` generates boxplots of `wage` for each level of `jobclass`.
+
+```{r}
+ggplot(data = Wage, aes(x = wage, y = jobclass)) +
+  geom_boxplot(color = "black") +
+  scale_x_continuous(labels = scales::dollar) +
+  labs(x = "Wage", y = "Jobclass") 
+```
+
+#### Density plot
+
+The density plot is a smooth version of the histogram, which is in my opinion more suited for grouped summary statistics. It can be created using function `geom_density()` from R package `ggplot2`. The grouping variable `jobclass` is assigned to argument `fill =`. The important feature to make this plot informative is the argument `alpha =`, which adjusts the color transparency of the grouping variable. More transparent colors are obtained with smaller values of `alpha`.
+
+```{r}
+ggplot(data = Wage, aes(x = wage, fill = jobclass)) +
+  geom_density(alpha = 0.6) +
+  scale_x_continuous(labels = scales::dollar) +
+  labs(x = "Wage", y = "Density", fill = "Jobclass")
+```
+
+#### Violin plot
+
+Another visualization technique which is the violin plot. It is a mixture of a boxplot and a density plot. The latter is mirrored such that it appears in shape as a boxplot. Below I marked the mean value of `wage` for each `joblcass` inside the violin plot with a red dot and also added a point range of one standard deviation from the mean.
+
+```{r}
+ggplot(data = Wage, aes(x = jobclass, y = wage)) +
+  geom_violin(trim = FALSE) +
+  stat_summary(fun.data = mean_sdl, fun.args = list(mult = 1), 
+               geom = "pointrange", color = "red") +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "", y = "Wage")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 4.3 Summarizing by multiple groups {.tabset .tabset-fade .tabset-pills}
+
+Of course we might add another variable for grouping a summary statistic so I am adding `health_ins` to the mix.
+
+#### purrr::map
+
+The function `split()` introduced in the previous section can only be used with one variable to split a dataset by its levels. I am helping myself out here with a little trick by combining the levels of both grouping variables in a new grouping variable. With the integrated function `intersect()` I am creating the new variable `jobclass_health_in` which coalesces the levels of `jobclass` and `health_ins`.
+
+```{r}
+Wage %>% 
+  mutate(jobclass_health_ins = interaction(jobclass, health_ins)) %>%
+  select(wage, jobclass_health_ins) %>%
+  split(.$jobclass_health_ins) %>% 
+  map(summary)
+```
+
+#### Tidy Approach
+
+However, I think the `tidy approach` introduced in the previous section is more suitable. On the one hand, I only have to alter the functions `group_by()` and `pivot_longer()` by adding `health_ins`. On the other hand, I preserve the flexibility to add various (location) parameters.
+
+```{r}
+grouped_summary <- Wage %>%
+  select(age, wage, jobclass, health_ins) %>%
+  group_by(jobclass, health_ins) %>%
+  summarise(across(
+    .cols = everything(),
+    .fns = list(median = median,
+                mean = mean)
+  )) %>%
+  pivot_longer(
+    cols = -c(jobclass, health_ins),
+    names_to = c("variable", "parameter"),
+    names_sep = "_",
+    values_to = "value"
+  )
+
+print(grouped_summary)
+```
+
+#### Boxplot
+
+Regarding boxplots the argument `fill =` might be supplied with `health_ins` in order to obtain separate boxplots for each level of `jobclass`.
+
+```{r}
+ggplot(data = Wage, aes(x = wage, y = jobclass, fill = health_ins)) +
+  geom_boxplot(color = "black") +
+  scale_x_continuous(labels = scales::dollar) +
+  labs(x = "Wage", y = "Jobclass", fill = "Health_ins") 
+```
+
+#### Density Plot 
+
+In the previous section I already assigned `jobclass` to argument `fill =` for the density plot. Instead I am now using function `facet_grid` and generate stand-alone density plots for each level of `jobclass`.
+
+```{r}
+ggplot(data = Wage, aes(x = wage, fill=jobclass)) +
+  geom_density(alpha = 0.6) +
+  facet_grid(cols = vars(health_ins), labeller = label_both) +
+  scale_x_continuous(labels = scales::dollar) +
+  labs(x = "Wage", y = "Density", fill = "Jobclass")
+```
+
+#### Violin plot
+
+The violin plot is specified in the same manner as the boxplot. Note that you have to alter the `position =` argument in function `stat_summary()` in order to shift the calculated point range inside the filled violin plots.
+
+```{r}
+ggplot(data = Wage, aes(x = jobclass, y = wage, fill = health_ins)) +
+  geom_violin(trim = FALSE) +
+   stat_summary(fun.data = mean_sdl, fun.args = list(mult = 1), 
+                geom = "pointrange", color = "red",
+                position = position_dodge(width = 0.9)) +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "", y = "Wage", fill = "Health_ins")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 4.4 Further methods {.tabset .tabset-fade .tabset-pills}
+
+#### Scatterplot
+
+The scatterplot is a two dimensional representation of two numeric variables. We use the function `geom_point()`to create it.
+
+```{r}
+ggplot(data = Wage, aes(x = age, y = wage)) +
+  geom_point() +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Age", y = "Wage")
+```
+
+It can be easily enhanced with many of the approaches we've seen in the previous sections such as adding further dimensions via `facet_wrap()`.
+
+```{r}
+ggplot(data = Wage, aes(x = age, y = wage)) +
+  geom_point() +
+  facet_wrap(.~year) +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Age", y = "Wage")
+```
+
+#### Quantile Plot
+
+In this plot we plot the value of a numeric variable against each share of all smaller values. By assessing the slope of the resulting curve we can identify local densities and outliers. Are the variable's values of equal size, they will lie on a horizontal line in this plot. If the values are  slightly different we will observe a slight slope. A steep slope indicates that the values are strongly different from each. Hence, the curve flattens out when the density of the distribution is high.
+
+There is, to my knowledge, no implementation of this plot readily availabe in R, so I've created something on my own that works with functions of the `ggplot2` package. We need to create a new variable `fraction` which assigns each osbervations some kind of rank reagarding the variable of interest. Likewise we have to sort the variable of interest (`wage`). Then we plot the ordered values of `wage` against quantiles of a uniform distribution.
+
+```{r}
+Wage_mod <-
+  Wage %>%
+  mutate(fraction = (1:length(wage) - 1)/(length(wage) - 1),
+         wage_sorted = sort(wage))
+
+Wage_mod %>%
+  ggplot(aes(x=fraction, y = wage_sorted)) +
+  geom_point() +
+  geom_abline(
+    intercept = min(Wage_mod$wage), 
+    slope = (max(Wage_mod$wage)-min(Wage_mod$wage))/(max(Wage_mod$fraction)-min(Wage_mod$fraction)),
+    color = "red"
+    ) +
+  geom_vline(xintercept = c(0.25,0.50, 0.75)) +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Fraction of the data",
+       y = "Quantiles of Wage")
+```
+
+For a large fraction of the data we observe only a slight slope, hence the distributions is pretty dense. On the other hand we observe steep slopes at the tails of the distribution. So there are some outliers with very high values of `wage` but also some with low values of `wage` - compared to all other wages.
+
+If we observe that the majority of values is below the straight red line, the distribution is said to be **skewed to the right**.
+
+#### Quantile-Quantile Plot
+
+With a Q-Q plot we can compare the distribution of two variables or the distribution of one variable against the normal distribution.
+
+```{r}
+ggplot(Wage, 
+       aes(sample = wage)) +
+  stat_qq() +
+  stat_qq_line() +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Theoretical Quantiles",
+       y = "Wage")
+```
+
+Below I compare `wage` between the `"Industrial"` and `"Information"` sector. If the workers wages between both sectors are identically distributed, all observations would lie on the straight line. As the observations are closert to the y-axis, workers in the information sector earn higher wages in total. I was not able to come up with a solution to do this in `ggplot2` yet.
+
+```{r}
+qqplot(Wage$wage[Wage$jobclass=="1. Industrial"], Wage$wage[Wage$jobclass=="2. Information"],)
+abline(a = 0, b = 1, lty="solid")
+```
+
+*****
+
+### {.unlisted .unnumbered .toc-ignore}
