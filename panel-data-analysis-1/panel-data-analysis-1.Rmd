@@ -1,0 +1,710 @@
+---
+title: "R Tutorial: Panel Data Analysis 1"
+subtitle: "Pooled Cross Sections, Fixed and Random Effects Models and Inference"
+author: 
+  - name: "Philipp Leppert"
+date: "15.01.2021"
+output: 
+  html_document:
+    anchor_sections: false
+    highlight: default
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    #code_folding: hide
+bibliography: references.bib 
+nocite: | 
+  @greene2018econometric
+  @plm
+  @doughtery2016
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, fig.align = "center")
+
+# Pakete Layout
+library(details)
+library(klippy)
+
+# Pakete Analyse
+library(ggplot2)
+library(dplyr)
+library(plm)
+library(lfe)
+library(lmtest)
+library(car)
+library(geepack)
+
+# ggplot theme
+theme_set(theme_bw())
+```
+
+```{r klippy, echo=FALSE, include=TRUE}
+klippy::klippy()
+```
+
+<style>
+#TOC {
+  background:  url('https://raw.githubusercontent.com/philippleppert/rpubs/main/PanelData1.png');
+  background-size: 180px 180px;
+  padding-top: 180px !important;
+  background-repeat: no-repeat;
+  background-position: center top;
+}
+</style>
+
+*****
+
+Reading time: `r format(ceiling(wordcountaddin::word_count()/200), nsmall=0)` minutes (`r format(wordcountaddin::word_count(), nsmall=0, big.mark=",")` words)
+
+*****
+
+## 1. Introduction
+
+### 1.1 R packages
+
+The following R packages are required for this tutorial.
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(plm)
+library(lfe)
+library(lmtest)
+library(car)
+library(geepack)
+```
+
+*****
+
+### 1.2 Dataset
+
+All practical examples are built around [Grunfeld's Investment Data](https://rdrr.io/rforge/plm/man/Grunfeld.html){target="_blank"} contained in R package `plm`. This dataset is a panel of 10 observational units (firms) from 1935 to 1954.
+
+```{r}
+data("Grunfeld", package = "plm")
+```
+
+*****
+
+### 1.3 Panel structure {.tabset .tabset-fade .tabset-pills}
+
+#### Balanced panels
+
+A panel is usually denoted by having multiple entries (rows) for the same entity (firm, person, ...) in the dataset. The multiple entries are due to different time periods at which the entity was observed. Initially, I create a twoway table of the variables `firm` and `year`. In total there are 10 different firms, each having one observation for year 1935 to year 1954. Since no *holes* (zeros) can be found in this structure, that is no missing information in any given year for each firm, this panel is considered to be **balanced**.
+
+```{r}
+Grunfeld %>%
+  select(year, firm) %>%
+  table()
+```
+
+With package `plm` this can be examined with function `is.pbalanced()`.
+
+```{r}
+Grunfeld %>%
+  is.pbalanced()
+```
+
+#### Unbalanced panels
+
+In package `plm` there is another panel dataset named `EmplUK`. Testing whether this panel is balanced gives the result `FALSE`. 
+
+```{r}
+data("EmplUK", package="plm")
+
+EmplUK %>%
+  is.pbalanced()
+```
+
+I am computing a twoway table of the first 10 indexes of firms and find that firm 1 to 4 have no records for the year 1976 and firms 5 to 10 have no data for the year 1983. 
+
+```{r}
+EmplUK %>%
+  select(year, firm) %>%
+  filter(firm %in% c(1:10)) %>%
+  table()
+```
+
+#### Balancing an unbalanced panel
+
+With function `make.pbalanced()` an unbalanced panel can be balanced. There are different ways how to do this and the argument `balance.type=` must be supplied with one out of three options. 
+
+Using `"fill"` creates a new row with `NAs` for each missing time point. The columns of firm 1, formerly missing for the year 1976, are now **filled** with `NA`.
+
+```{r}
+EmplUK.balanced1 <- make.pbalanced(EmplUK, balance.type = "fill")
+EmplUK.balanced1[1:8,]
+```
+
+Using `"shared.times"` keeps all available firms in the dataset but drops all time periods where at least one firm has no data. Only the **years 1978-1982** remain since they are **shared** by all firms.
+
+```{r}
+EmplUK.balanced2 <- make.pbalanced(EmplUK, balance.type = "shared.times")
+EmplUK.balanced2[1:10,]
+```
+
+By using `"shared.individuals"` all available time periods are kept but only for those firms which have information for each of them. Only **firm 127 to 140** remain since they **share** all available time periods.
+
+```{r}
+EmplUK.balanced3 <- make.pbalanced(EmplUK, balance.type = "shared.individuals")
+
+EmplUK.balanced3 %>%
+  group_by(firm) %>%
+  slice(1)
+```
+
+#### Time dimension gaps
+
+Furthermore, the function `is.pconsecutive()` tests whether the entities in the data have any gaps in their time series. Testing the `Grunfeld` data shows that no gaps in the time periods are present for any firm.
+
+```{r}
+Grunfeld %>%
+  is.pconsecutive()
+```
+
+Next I drop the year 1940 for firm 1, 3 and 7 and repeat the test. The output shows that now there are gaps in the time series for firms 1, 3 and 7!
+
+```{r}
+Grunfeld %>%
+  filter(!(firm %in% c(1,3,7) & year == 1940)) %>%
+  is.pconsecutive()
+```
+
+With function `make.pconsecutive()` the time gaps can be identified and **closed** with `NA` values.
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+## 2. Visualization Techniques {.tabset .tabset-fade .tabset-pills}
+
+When doing graphical analysis with panel data, the entity and time dimension has to be taken into account in order to get meaningful results.
+
+### Naive Lineplot
+
+A simple lineplot of gross investment (`inv`) over time (`year`) without taking into account the entity dimension does not give meaningful results!
+
+```{r}
+ggplot(data = Grunfeld, aes(x = year, y = inv)) +
+  geom_line() +
+  labs(x = "Year",  y = "Gross Investment") +
+  theme(legend.position = "none")
+```
+
+### Separated Lineplot
+
+Therefore, I create a line plot for each `firm` separated by colour. The additional blue dashed line indicates the overall trend in the data considering all firms simultaneously. It is in fact the fitted regression line of a linear model between `inv` and `year`. Firm 1 and 2 have a relatively high gross investment compared to the other firms. On average, gross investment increases over time.
+
+```{r}
+ggplot(data = Grunfeld, aes(x = year, y = inv)) +
+  geom_line(aes(colour = as.factor(firm))) +
+  geom_smooth(method = "lm", se = F, lty = "dashed") +
+  labs(x = "Year",  y = "Gross Investment") +
+  theme(legend.position = "none")
+```
+
+### Entity Heterogeneity  
+
+Heterogeneity across firms can be shown with a line plot. The blue line connects the mean values of `inv`, using all available years across firms (entities). 
+
+```{r}
+Grunfeld %>%
+  group_by(firm) %>%
+  summarise(inv_mean = mean(inv)) %>%
+  left_join(Grunfeld) %>%
+  ggplot(data = ., 
+         aes(x = reorder(as.character(firm), firm), y = inv)) +
+  geom_point() +
+  geom_line(aes(x = firm, y = inv_mean), col = "blue") +
+  labs(x = "Firm", y = "Gross Investment")
+```
+
+Depending on the dataset the entity identifier might be non-numeric. In the `Gasoline` dataset, the entity dimension refers to countries and the argument `group = 1` has to be added in function `geom_line()` in order to draw a connecting line between the mean values.
+
+```{r}
+data(Gasoline, package = "plm")
+
+Gasoline %>%
+  group_by(country) %>%
+  summarise(mean = mean(lgaspcar)) %>%
+  left_join(Gasoline) %>%
+  ggplot(data = ., 
+         aes(x = country, y = lgaspcar)) +
+  geom_point() +
+  geom_line(aes(x = country, y = mean, group = 1), col = "blue") +
+  labs(x = "Country", y = "Motor gasoline consumption per car (Log)") +
+  theme(axis.text.x = element_text(angle = 90))
+```                     
+
+### Time Heterogeneity
+
+The same holds for the time dimension. Here the blue line connects the mean values of `inv`, using all available firms across years (time).
+
+```{r}
+Grunfeld %>%
+  group_by(year) %>%
+  summarise(inv_mean = mean(inv)) %>%
+  left_join(Grunfeld) %>%
+  ggplot(data = ., 
+         aes(x = year, y = inv)) +
+  geom_point() +
+  geom_line(aes(x = year, y = inv_mean), col = "blue") +
+  scale_x_continuous(labels = as.character(Grunfeld$year), 
+                     breaks = Grunfeld$year) +
+  labs(x = "Year", y = "Gross Investment") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+## {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+## 3. Estimation Methods
+
+### 3.1 Pooled Cross Sections {.tabset .tabset-fade .tabset-pills}
+
+OLS can be used to **pool** observations of the same individual recorded at different time points. However, observations of the *same* individual are then treated as if they originate from *other* individuals. Important influences like serial correlation of observations within the same entity cannot be considered, leading to biased estimates.
+
+#### Pooled OLS via lm()
+
+With function `lm()` it is straightforward to estimate the pooled OLS model. I regress the firms' gross investment (`inv`) on their stock of plant and equipment (`capital`).
+
+```{r}
+pooled_ols_lm <- lm(inv ~ capital, data = Grunfeld )
+
+summary(pooled_ols_lm)
+```
+
+The coefficient of `capital` shows the average effect on `inv` when `capital` increases by one unit.
+
+#### Pooled OLS via plm()
+
+We achieve the same coefficient estimates by using function `plm()` from package `plm`. First, an index has to be supplied, corresponding to the entity and/or time dimension of the panel. The argument `model=` is set to `"pooling"`. Additional information about the dataset's panel structure is shown at the top of the summary output. The `Grunfeld` data consists of 10 firms (`n`) measured at 20 time points (`T`) resulting in 200 observations in total (`N`).
+
+```{r}
+pooled_ols_plm <- plm(inv ~ capital, data = Grunfeld, 
+                      index = c("firm", "year"), 
+                      effect = "individual", model = "pooling")
+
+summary(pooled_ols_plm)
+```
+
+#### Scatterplot
+
+With a scatterplot it is easy to see that, although firms could be distinguished by the variable `firm`, OLS estimation treats all observations as if they come from different entities and fits the regression line accordingly.
+
+```{r}
+ggplot(data = Grunfeld,
+       aes(x = capital, y = inv)) +
+  geom_point(aes(shape = factor(firm, 
+                                levels = c(1:10)))) +
+  geom_smooth(method = "lm", se = F) +
+  scale_shape_manual(values = 1:10) +
+  labs(x = "Stock of Plant and Equipment",
+       y = "Gross Investment",
+       shape = "Firm")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 3.2 Fixed Effects Model
+
+The fixed effects (FE) model, also called *within estimator* or *least squares dummy variable (LSDV)* model, is commonly applied to remove omitted variable bias. By estimating changes **within** a specific group (over time) all time-invariant differences between entities (individuals, firms, ...) are controlled for. For example:
+
+* the unobserved ability of the management influencing the firm's revenue
+
+* or the skills influencing an employee's wage .
+
+The assumption behind the FE model is that something influences the independent variables and one needs to control for it (the error term and independent variables are correlated). Hence, the FE model removes characteristics that do not change over time, leading to unbiased estimates of the remaining regressors on the dependent variable. If unobserved characteristics do not change over time, each change in the dependent variable must be due to influences not related to the fixed effects, which are controlled for. The FE model is hence suited for investigating causal relationships. 
+
+Note that the influence of time-invariant regressors on the dependent variable cannot be examined with a FE model. Also they do not work well with data with low within-variance or variables which only change slowly over time.
+
+*****
+
+#### 3.2.1 Least Squares Dummy Variable Estimation {.tabset .tabset-fade .tabset-pills}
+
+##### FE using lm()
+
+With function `lm()` a FE model can be estimated by including dummy variables for all firms. This is the so called *least squares dummy variable (LSDV)* approach. I have shown before that the factor variable `firm` uniquely identifies each firm in the dataset. Similarly to the pooled OLS model, I am regressing `inv` on `capital`. If there is a large number of individuals, the LSDV method is expensive from a computational point of view.
+
+```{r}
+fe_model_lm <- lm(inv ~ capital + factor(firm), data = Grunfeld)
+
+summary(fe_model_lm)
+```
+
+Remember that one firm dummy variable is dropped to avoid the dummy variable trap.
+
+##### Excluding the intercept
+
+Next up, I calculate the same model but drop the constant (`intercept`) by adding `-1` to the formula, so that no coeffcient (level) of `firm` is excluded. Note that this does not alter the coefficient estimate of `capital`!
+
+```{r}
+fe_model_lm_nocons <- lm(inv ~ capital + factor(firm) -1, data = Grunfeld)
+
+summary(fe_model_lm_nocons)
+```
+
+##### Scatterplot
+
+Due to the introduction of firm dummy variables each firm has its own intercept with the y axis! For comparison, I plotted the fitted values from the pooled OLS model (blue dashed line). Its slope is more steep compared to the LSDV approach as influential observations of firm 1 lead to an upward bias.
+
+```{r}
+ggplot(data = broom::augment(fe_model_lm),
+       aes(x = capital, y = .fitted)) +
+  geom_point(aes(color = `factor(firm)`)) +
+  geom_line(aes(color = `factor(firm)`)) +
+  geom_line(data=broom::augment(pooled_ols_lm), 
+            aes(x = capital, y =.fitted), 
+            color = "blue", lty="dashed", size = 1) +
+  labs(x = "Stock of Plant and Equipment", y = "Fitted Values (inv ~ capital)",
+       color = "Firm") 
+```
+
+#### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+#### 3.2.2 Within-groups Estimator {.tabset .tabset-fade .tabset-pills}
+
+##### FE using plm()
+
+The same coefficient estimates as with the LSDV approach can be computed with function `plm()`. The argument `model=` is now set to `"within"`. This is the *within estimator* with n entity-specific intercepts.
+
+```{r}
+fe_model_plm <- plm(inv ~ capital, data = Grunfeld, 
+                    index = c("firm", "year"), 
+                    effect = "individual", model = "within")
+
+summary(fe_model_plm)
+```
+
+The coefficient of `capital` indicates how much `inv` changes over time, on average per country, when `capital` increases by one unit.
+
+With function `fixef()` the fixed effects, i.e. the constants for each firm, can be extracted. Compare them with the coefficients of the LSDV approach (w/o the consant) - they must be identical.
+
+```{r}
+fixef(fe_model_plm)
+```
+
+##### FE using felm()
+
+The function `felm()` from package `lfe` does the same as `lm()` and `plm()`. However, it displays the F-statistic and R^2^ of a *full* and *projected* model. The full model is the first model with dummy variables for each firm (LSDV approach) and the projected model is the within estimator. In general, you want to provide the R^2^ from the full model. Note that the values of the F-statistic and R^2^ of the full model displayed here are only the same when the constant is included in the LSDV model.
+
+```{r}
+fe_model_felm <- lfe::felm(inv ~ capital | factor(firm), 
+                           data = Grunfeld)
+
+summary(fe_model_felm)
+```
+
+##### Testing for FE
+
+With function `pFtest()` one can test for fixed effects with the null hypothesis that pooled OLS is better than FE. Alternatively, this test can be carried out by jointly assessing the significance of the dummy variables in the LSDV approach. The results are identical.
+
+```{r}
+# Within estimator vs. Pooled OLS
+pFtest(fe_model_plm, pooled_ols_plm)
+
+# Joint significane test with LSDV approach
+car::linearHypothesis(fe_model_lm,
+                      hypothesis.matrix = matchCoefs(fe_model_lm, "firm"))
+```
+
+In both cases the null hypothesis is rejected in favor of the alternative that there are significant fixed effects.
+
+#### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+#### 3.2.3 First-difference Estimator {.tabset .tabset-fade .tabset-pills}
+
+##### More than two time periods
+
+There is another way of estimating a FE model by specifying `model = "fd"` in function `plm()`.
+
+```{r}
+fe_model_fd<- plm(inv ~ capital -1, data = Grunfeld,
+                  index = c("firm", "year"), 
+                  effect = "individual", model = "fd")
+
+summary(fe_model_fd)
+```
+
+The coefficient of `capital` is now different compared to the LSDV approach and within-groups estimator. This is because the coefficients and standard errors of the first-differenced model are only identical to the previously obtained results when there are two time periods. For longer time series, both the coefficients and the standard errors will be different.
+
+##### Two time periods
+
+Let's verify the former assumption by dropping all years except 1935 and 1936 from the `Grunfeld` dataset and estimate the model again (also for the within model).
+
+```{r}
+# Within estimation (two periods)
+fe_model_plm_check <- plm(inv ~ capital, 
+                          data = Grunfeld, 
+                          subset = year %in% c(1935, 1936), 
+                          index = c("firm", "year"), 
+                          effect = "individual", model = "within")
+
+lmtest::coeftest(fe_model_plm_check)
+
+# FD estimation (two periods)
+fe_model_fd_check<- plm(inv ~ capital -1,
+                        data = Grunfeld, 
+                        subset = year %in% c(1935, 1936), 
+                        index = c("firm", "year"), 
+                        effect = "individual", model = "fd")
+
+
+lmtest::coeftest(fe_model_fd_check)
+```
+
+#### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 3.3 Random Effects Model {.tabset .tabset-fade .tabset-pills}
+
+The RE model (also called *Partial Pooling Model*) assumes, in contrast to the FE model, that any variation **between** entities is random and not correlated with the regressors used in the estimation model. If there are reasons to believe that differences between entities influence the dependent variable, a RE model should be preferred. This also means that time-invariant variables (like a person's gender) can be taken into account as regressors. The entity's error term (unobserved heterogeneity) is hence not correlated with the regressors.
+
+With RE models individual characteristics have to be specified if they have an influence on the other regressors. This poses the problem hat some variables need to be controlled for and might not be available, leading to omitted variable bias. Furthermore, the RE model allows for population inference from the sample because it assumes a normal distribution.
+
+To break down the difference between FE and RE:
+
+* the FE model assumes that an individual (entity) specific effect is **correlated** with the independent variables,
+
+* while the RE model assumes that an individual (entity) specific effect is **not correlated** with the independent variables.
+
+#### RE via plm()
+
+With function `plm()` the RE model can be estimated. The argument `model=` is set to value `"random"`.
+
+```{r}
+re_model_plm <- plm(inv ~ capital, data = Grunfeld, 
+                    index = c("firm", "year"), 
+                    effect = "individual", model = "random")
+
+summary(re_model_plm)
+```
+
+The coefficients in the RE model include both the within-entity and between-entity effects. When having data with multiple entities and time periods the coefficient of `capital` represents the average effect on `inv` when `capital` changes across years and between firms by one unit.
+
+#### Decision Tree
+
+This figure is taken from Chapter 14 @doughtery2016.
+
+![](literature/decision_tree_fe_re_ols.jpg)
+
+#### Generalized Estimating Equations
+
+With this technique we can make specific assumptions about the structure of the correlation matrix of the errors. If the error structure is correctly specified, our model's coefficients will be more exact. However, as opposed to the FE-model, the coefficients can still be biased due to missing time-invariant variables. The function `geeglm()` is used below to speciy a model with an `"exchangeable"` correlation structure. Note that this is equivalent to the RE-model.
+
+```{r}
+gee_model1 <- geeglm(inv ~ capital, id = firm, waves = year, 
+                     data = Grunfeld, family = gaussian, corstr = "exchangeable")
+summary(gee_model1)
+```
+
+Next I'm using `"ar1"` to estimate the same model with an correlation matrix of the type *first order auto regression*.
+
+```{r}
+gee_model2 <- geeglm(inv ~ capital, id = firm, waves = year, 
+                     data = Grunfeld, family = gaussian, corstr = "ar1")
+summary(gee_model2)
+```
+
+When using `"independence"` as input for argument `corstr =` we obtain the pooled OLS result.
+
+```{r}
+gee_model3 <- geeglm(inv ~ capital, id = firm, waves = year, 
+                     data = Grunfeld, family = gaussian, corstr = "independence")
+summary(gee_model3)
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 3.4 Including the Time Dimension {.tabset .tabset-fade .tabset-pills}
+
+#### Pooled OLS via lm()/plm()
+
+The pooled OLS model may be enhanced with the time dimension by including appropriate dummy variables. In the `Grunfeld` dataset the factor variable `year` contains information for the time dimension. Remember that one level of a factor variable will be held out when estimating the model. By controlling for `year` the coefficient of `capital` changes compared to the initial pooled OLS model. 
+
+```{r}
+pooled_ols_time_lm <- lm(inv ~ capital + factor(year), data = Grunfeld)
+
+coef(pooled_ols_time_lm)[2]
+```
+
+The same stratey can be applied to function `plm()`.
+
+```{r}
+pooled_ols_time_plm <- plm(inv ~ capital + factor(year), data = Grunfeld, 
+                           index = c("firm", "year"), effect = "individual",
+                           model = "pooling")
+
+coef(pooled_ols_time_plm)[2]
+```
+
+#### FE via lm()/plm()
+
+For the LSDV approach the time dimension is added in the same fashion as with pooled OLS. 
+
+```{r}
+fe_time_lm <- lm(inv ~ capital + factor(firm) + factor(year), 
+                 data = Grunfeld)
+
+coef(fe_time_lm)[2]
+```
+
+The within estimator computed with function `plm()` can be supplied with time FE by setting the argument `effect=` to value `"twoways"`.
+
+```{r}
+fe_time_plm <- plm(inv ~ capital, data = Grunfeld, 
+                   index = c("firm", "year"), effect = "twoways",
+                   model = "within")
+
+coef(fe_time_plm)[1]
+```
+
+#### FE via felm()
+
+In function `felm()` the time dimension is added at the right hand side of the formula.
+
+```{r}
+fe_time_felm <- lfe::felm(inv ~ capital | factor(firm) + factor(year), 
+                          data = Grunfeld)
+
+coef(fe_time_felm)[1]
+```
+
+#### Testing for Time FE
+
+There is also a possibility to test whether time fixed effects are needed. The null hypothesis is that the coefficients are *together* zero for all years and hence no time fixed effects need to be taken into account. For the within model this can be tested with function `pFtest()` which I already used for testing for the presence of individual fixed effects in section 3.2. The model with time FE is compared to the one without. You may also use the LSDV model and test the joint hypothesis that all coefficients of variable `year` are together zero. The results are identical.
+
+```{r}
+# Within model
+pFtest(fe_time_plm, fe_model_plm) 
+
+# LSDV model
+car::linearHypothesis(fe_time_lm, matchCoefs(fe_time_lm, "year")) 
+```
+
+There is evidence that time fixed effects should be taken into account.
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+## 4. Tests for Panel Data Models {.tabset .tabset-fade .tabset-pills}
+
+### RE or FE? 
+
+A decision between a fixed and random effects model can be made with the Hausman test, which checks whether the individual error terms are correlated with the regressors. The null hypothesis states that there is no such correlation (RE). The alternative hypothesis is that a correlation exists (FE). The test is implemented in function `phtest()`.
+
+```{r}
+phtest(fe_model_plm, re_model_plm)
+```
+
+The null hypothesis cannot be rejected here, hence we should use a RE model.
+
+### Pooled OLS or RE?
+
+The Breusch-Pagan Lagrange multiplier (LM) Test helps to decide between a random effects model and a simple OLS regression. This test is implemented in function `plmtest()` with the null hypothesis that the variance across entities is zero. In this setting this means that there are no significant differences across firms (no panel effect).
+
+```{r}
+plmtest(pooled_ols_plm, effect = "individual", type = c("bp"))
+```
+
+The test shows that there are significant differences across firms. Running a pooled OLS regression is thus not appropriate and the RE model is the better choice.
+
+### Heteroskedasticity 
+
+Testing for the presence of heteroskedasticity is also possible in panel settings.The null hypothesis of the Breusch-Pagan test against heteroskedasticity is that homoskedasticity is present. The test is implemented in function `bptest()` in package `lmtest`.
+
+```{r}
+lmtest::bptest(inv ~ capital + factor(firm), 
+               studentize = F, data = Grunfeld)
+```
+
+There is strong evidence for the presense of heteroskedasticity. Hence, the use of robust standard errors is advised.
+
+### Serial Correlation 
+
+Since the `Grunfeld` dataset is "20 years long", a test for serial correlation of the residuals should be performed. Serial correlation leads to an underestimation of standard errors (too small) and an overestimation of R^2^ (too large). The Breusch-Godfrey/Wooldridge test for serial correlation in panel models is implemented in function `pbgtest()` with the null hypothesis that there is no serial correlation.
+
+```{r}
+pbgtest(fe_model_plm)
+```
+
+There is strong evidence that the residuals are serially correlated.
+
+## {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+## 5. Panel Data and Inference  {.tabset .tabset-fade .tabset-pills}
+
+If the error terms of different observations from the same entity are correlated, the standard errors have to be adjusted. In the `Grunfdeld` dataset a firm is observed at 20 different time points and the observations for the same individuals are hence not independent. This leads to the previously described problem of serial correlation of the residuals. In order to solve this issue clustered standard errors have to be used. Both standard OLS as well as heteroskedasticity robust standard errors are wrong because they assume that the error terms u~i,t~ are not serially correlated. Hence they underestimate the true sampling uncertainty (there is less random variation when error terms are correlated). Clustered standard errors estimate the variance of the coefficient when regressors are i.i.d. across entities but correlated within the entity. 
+
+This issue is not restricted to panel data and can also occur in cross-sectional studies, if the data contains clusters of observations and their error terms are correlated within but not between the clusters (regions, schools, branches, ...).
+
+### Clustered SE (OLS)
+
+In order to corrects the standard errors function `vcovHC()` is used which originates from package `sandwich` but is also available in package `plm`. The argument `cluster =` is set to `"group"` and the argument `type=` controls the estimation type of the standard errors. I am using `"sss"` which includes the small sample correction method as applied by Stata (so it is easy to check the results with another software).
+
+```{r}
+# OLS standard error
+coeftest(pooled_ols_plm)[2,c(1,2)]
+
+# Cluster robust standard error
+coeftest(pooled_ols_plm,
+         vcov = vcovHC(pooled_ols_plm,
+                       type = "sss", 
+                       cluster = "group"))[2,c(1,2)]  
+```
+
+### Clustered SE (FE)
+
+This works just the same for the FE model. However, although using `type = "sss"` leads to a minor difference when I compute the standard error with Stata. I am not sure why that is the case.
+
+```{r}
+# FE standard error
+coeftest(fe_model_plm)[,c(1,2)]
+
+# Cluster robust standard error
+coeftest(fe_model_plm, 
+         vcov = vcovHC(fe_model_plm,
+                       type = "sss",
+                       cluster = "group"))[,c(1,2)]
+```
+
+By using function `felm()` from package `lfe` cluster-robust standard errors can be computed directly. The standard errors are the same as in Stata here so this might be the best function to use when wanting to compute within-groups FE.
+
+```{r}
+fe_model_felm2 <- lfe::felm(inv ~ capital | firm | 0 | firm, data = Grunfeld)
+
+summary(fe_model_felm2)
+```
+
+### Clustered SE (RE)
+
+Computing cluster robust standard errors for the RE model is not different. Again, the results are the same as in Stata.
+
+```{r}
+coeftest(re_model_plm)[2,c(1,2)]
+
+coeftest(re_model_plm, 
+         vcov = vcovHC(re_model_plm,
+                       type = "sss",
+                       cluster = "group"))[2,c(1,2)]
+```
+
+## {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+## References
