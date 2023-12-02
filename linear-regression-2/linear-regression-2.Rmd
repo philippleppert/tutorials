@@ -1,0 +1,886 @@
+---
+title: "R Tutorial: Linear Regression 2"
+subtitle: "Functional form in the linear model"
+author: 
+  - name: "Philipp Leppert"
+date: "02.10.2020"
+output: 
+  html_document:
+    anchor_sections: false
+    highlight: default
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    #code_folding: hide
+bibliography: references.bib
+nocite: |
+  @islr
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, fig.align = "center")
+
+# Pakete Layout
+library(details)
+library(klippy)
+
+# Pakete Analyse
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(broom)
+library(purrr)
+library(scales)
+library(GGally)
+library(splines)
+library(magrittr)
+
+# ggplot theme
+theme_set(theme_bw())
+```
+
+```{r klippy, echo=FALSE, include=TRUE}
+klippy::klippy()
+```
+
+<style>
+#TOC {
+  background:  url('https://raw.githubusercontent.com/philippleppert/rpubs/main/LinReg2.png');
+  background-size: 180px 180px;
+  padding-top: 180px !important;
+  background-repeat: no-repeat;
+  background-position: center top;
+}
+</style>
+
+<style type="text/css">
+
+td {  /* Table  */
+  font-size: 13px;
+}
+
+</style>
+
+*****
+
+Reading time: `r format(ceiling(wordcountaddin::word_count()/200), nsmall=0)` minutes (`r format(wordcountaddin::word_count(), nsmall=0, big.mark=",")` words)
+
+*****
+
+## 1. Introduction
+
+This tutorial assumes that you are already familiar with the theoretical basics of linear regression like the Gauss-Markov-assumptions as well as how to run OLS in R. In case you are not, have a look at this [tutorial](https://rpubs.com/phle/r_tutorial_linear_regression){target="_blank"}.
+In the following sections I am going to discuss different approaches how to modify the functional form of a linear regression model, starting with very basic content to more sophisticated methods.
+
+### 1.1 R packages
+
+The following R packages are required for this tutorial.
+
+```{r}
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(magrittr)
+library(broom)
+library(purrr)
+library(scales)
+library(GGally)
+library(splines)
+```
+
+### 1.2 Dataset
+
+All practical examples are built around the [Mid-Atlantic Wage Dataset](https://rdrr.io/cran/ISLR/man/Wage.html){target="_blank"} contained in R package `ISLR`. It contains information on 3,000 male workers in the *Mid-Atlantic* region like their yearly salary, age and other demographic characteristics. After reading the data, I convert `wage` in full US-Dollar.
+
+```{r}
+data("Wage", package = "ISLR")
+
+Wage <- 
+  Wage %>%
+  mutate(wage = wage*1000)
+```
+
+*****
+
+## 2. Variable transformation
+
+The standard linear regression model (without any transformations) implies that raising any regressor ($x_i$) by one unit leads to a change of the dependent variable ($y$) by $β_i$ units. Now, any transformation of a regressor or the regressand will alter the interpretation. 
+
+### 2.1 Overview
+
+We can distinguish four different types of models. Each is discussed in more detail throughout this section.
+
+Model | Equation | Regressand | Regressor | Interpretation
+------ | --------- | --------- | ---------- | --------------
+Level-Level |  y = β~0~ + β~1~x + u | y | x | Raising x by one unit changes (c. p.) y on average by β~1~ units.
+Log-Level | log~e~(y) = β~0~ + β~1~x + u | log~e~(y) | x | Raising x by one unit changes (c. p.) y on average approximately by 100$*$β~1~%. Raising x by one unit changes (c. p.) y on average exactly by 100$*$(e^β~1~-1^)%.
+Level-Log | y = β~0~ + β~1~log~e~(x) + u | y | log~e~(x) | Raising x by one percent changes (c. p.) y on average by approximately β~1~/100 units. Raising x by one percent changes (c. p.) y on average exactly by β~1~$*$ln(1 + 1/100) units (semi-elasticity).
+Log-Log | log~e~(y) = β~0~ + β~1~log~e~(x) + u | log~e~(y) | log~e~(x) | Raising x by one percent changes (c. p.) y on average by β~1~% (elasticity).
+
+*****
+
+### 2.2 Level-Level-Model {.tabset .tabset-fade .tabset-pills}
+
+This is the standard linear regression model and I am regressing `wage` on `age`. The variable `wage` measures a respondent's salary for a specific year in US-Dollar and the variable `age` measures a respondent's age in years.
+
+#### Model
+
+```{r}
+levlev <- lm(wage ~ age, data = Wage)
+summary(levlev)
+```
+
+#### Scatterplot
+
+The function `augment()` from R package `broom` takes an `lm` object and transforms its content into a tidy format. The model's predicted values are found in column `.fitted`.
+
+```{r}
+ggplot(data = broom::augment(levlev),
+       aes(x = age, y = wage)) +
+  geom_point() +
+  geom_line(aes(y = .fitted), size = 1, color = "red") +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Age", y = "Wage")
+```
+
+#### Digression: The Intercept
+
+At first, I am creating a new dataset (`age.df`) with a column `age` whose values range from 0 to 100. With function `predict()` I am able to use the already specified model `levlev` to predict the `wage` for each value of `age`. Hence, I am generating predicted values for `wage` which are outside the boundaries of the respondents' `age` in the original dataset. There, the lowest and highest values of `age` are 18 and 80 respectively. This extrapolation is not very meaningful since working respondents will rarely be younger than 18 or older than 80. However, it highlights the irrelevance of interpreting the constant in this model. The `intercept` is hence the intersection of the model's regression line with the y-axis, reflected by respondents that are hypothetically 0 years old.
+
+```{r}
+age.df <- tibble(age = 0:100)
+age.df$yhat <- predict(levlev, newdata = age.df)
+
+ggplot(data = Wage, aes(x = age, y = wage)) +
+  geom_point() +
+  geom_line(data = age.df,
+            aes(x = age, y = yhat),
+            size = 1, color = "red") +
+  scale_x_continuous(expand = expansion(mult = c(0, 0))) +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Age", y = "Wage")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+Raising the respondents' `age` by **1 year** changes their `wage` on average by **$`r format(round(levlev$coefficients[2]), nsmall=0, big.mark =",")`** (remember that this is the slope of the regression line).  As shown in the digression, the `intercept` is the predicted value of `wage` for respondents aged 0 years (**$`r format(round(age.df[age.df$age==0,]$yhat), nsmall = 0, big.mark =",")`**).
+
+*****
+
+### 2.3 Log-Level-Model {.tabset .tabset-fade .tabset-pills}
+
+Now we'll discuss the first type of transformation in more detail. For this model I'm computing the **logarithm** of `wage` and regress it on `age`.
+
+#### Model
+
+```{r}
+loglev <- lm(log(wage) ~ age, data = Wage)
+summary(loglev)
+```
+
+#### Scatterplot
+
+```{r}
+ggplot(broom::augment(loglev),
+       aes(x = age, y = `log(wage)`)) +
+  geom_point() + 
+  geom_line(aes(y = .fitted), size = 1, color = "red") +
+  labs(x = "Age", y = "Log(Wage)")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+Raising the respondents' `age` by **1 year** changes their `wage` on average by approximately **`r sprintf("%.3f", loglev$coefficients[2]*100)`%**. Exactly, the `wage` changes on average by **`r sprintf("%.3f", (exp(loglev$coefficients[2])-1)*100)`%** (calculation below).
+
+```{r}
+exp(loglev$coefficients[2])-1
+```
+
+*****
+
+### 2.4 Level-Log-Model {.tabset .tabset-fade .tabset-pills}
+
+Next, I compute the logarithm of `age` and use it instead of the original variable in the regression model.
+
+#### Model
+
+```{r}
+levlog <- lm(wage ~ log(age), data = Wage)
+summary(levlog)
+```
+
+#### Scatterplot
+
+```{r}
+ggplot(broom::augment(levlog),
+       aes(x = `log(age)`, y = wage)) +
+  geom_point() +
+  geom_line(aes(y = .fitted), size = 1, color = "red") +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Log(Age)", y = "Wage")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+When **doubling** the respondents' `age`, i.e. an increase by **100%**, their `wage` changes on average by **$`r format(round(levlog$coefficients[2]), nsmall=0, big.mark =",")`**. Alternatively we can say that raising the respondents' `age` by **1%** changes their `wage` on average by **$`r format(round(levlog$coefficients[2]/100, 2), nsmall=2, big.mark =",")`**.
+
+*****
+
+### 2.5 Log-Log-Model {.tabset .tabset-fade .tabset-pills}
+
+At last, I compute the logarithm of both `wage` and `age` and run the model again.
+
+#### Model
+
+```{r}
+loglog <- lm(log(wage) ~ log(age), data = Wage)
+summary(loglog)
+```
+
+#### Scatterplot
+
+```{r}
+ggplot(broom::augment(loglog),
+       aes(x = `log(age)`, y = `log(wage)`)) +
+  geom_point() +
+  geom_line(aes(y = .fitted), size = 1, color = "red") +
+  labs(x = "Log(Age)", y = "Log(Wage)")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+Raising the respondents' `age` by **1%** changes their `wage` on average by **`r sprintf("%.2f", loglog$coefficients[2])`%**. 
+
+*****
+
+## 3. Adding qualitative variables
+
+In the previous section I only used the numerical variables `wage` and `age`, which are both interval-scaled (there is no such thing as being -1 years old or earning -1000 US-Dollars). Now, I'm going to add dichotomous variables with exactly two distinct values (often referred to as **dummy variables**) and variables with at least three distinct values (often referred to as **factor** or **categorical variables**) to the regression model.
+
+### 3.1 Dummy variables {.tabset .tabset-fade .tabset-pills}
+
+A dummy variable has exactly **two values** (levels). In the model below I am regressing the respondents' `wage` on their `health` and `age`. The variable `health` indicates the health level of a worker and has two levels: `<= Good` and `>= Very Good`.
+
+#### Model
+
+The `lm()` function treats dummy variables as intended if they are either of class `numeric`, `factor` or `character`, so usually this should not cause any trouble.
+
+```{r}
+lm_dummy <- lm(wage ~ health + age, data = Wage)
+summary(lm_dummy)
+```
+
+#### Scatterplot
+
+When plotting this model we see two fitted regression lines for each level of `health`. The slopes of both regression lines are identical but they have diferent intercepts with the y-axis. The `health` dummy is added in argument `color =`.
+
+```{r}
+ggplot(augment(lm_dummy),
+       aes(x = age, y = wage, color = health)) +
+  geom_point(alpha = 0.5) +
+  geom_line(aes(y = .fitted), size = 1) +
+  scale_y_continuous(labels = scales::dollar) +
+  scale_color_manual(values = c("red","darkgreen")) +
+  labs(x = "Age", y = "Wage", color = "Health")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+Interpretation of dummy variables in the linear model is always with respect to a so called **reference** or **base group** (= a level of the dummy variable.) This level does not appear with a coefficient in the regression output. Regarding the dummy variable `health`, respondents with health condition `<= Good` are the reference group. The regression output hence displays the coefficient for respondents with health condition `>= Very Good`, indiciating the average change of `wage` compared to the reference group by **$`r format(round(lm_dummy$coefficients[2]), nsmall=0, big.mark = ",")`**. 
+The effect of respondents' `age` on their `wage` is independent of their health condition (**$`r format(round(lm_dummy$coefficients[3]), nsmall=0)`**) but different from the value we've found in section 2 without using `health` in the model. Some of the variation in a respondent's `wage` is explained with `health`, hence the magnitude of the `age` coefficient changes. We might call `health` a **control variables** in this context.
+
+*****
+
+### 3.2 Categorical variables {.tabset .tabset-fade .tabset-pills}
+
+A categorical or factor variable has, compared to a dummy variable, **at least three levels**. In the following model I am regressing the respondents' `wage` on their level of `education` and `age`. The categorical variable `education` has 5 levels. Often a logic order of the categories eases the interpretation of the model (in the `Wage` dataset the categories already range from lower to higher `education` levels). However, it doesn't really matter with respect to the specification  of the model or the estimation of the coefficients.
+
+#### Model
+
+The `lm()` function does recognize categorical variables when they are of class `factor` or `character`. For example, you can check this before running the model with function `is.factor()`. Otherwise a catergorical variable has to be converted before specifiying it or within the `lm()` function or R will treat it like a numeric variable (like `age`).
+
+```{r}
+lm_faktor <- lm(wage ~ education + age, data=Wage)
+summary(lm_faktor)
+```
+
+#### Scatterplot
+
+Now we obtain 5 different regression lines when plotting the model - one line for each level of education. Again, their slopes are identical while their intercepts with the y-axis are different.
+
+```{r}
+ggplot(augment(lm_faktor),
+       aes(x = age, y = wage, color = education)) +
+  geom_point(alpha = 0.5) +
+  geom_line(aes(y = .fitted), size = 1) +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Age", y = "Wage", color = "Education")
+```
+
+#### Digression: Plotting Regression Coefficients
+
+Interpreting coefficients of categorical variables with many levels is often cumbersome. However, there is visualization technique called **coefficient plot**, which eases the interpretation. It can be created with function `ggcoef()` from R package `GGally`. Each blue dot represents the point estimate of the corresponding regression coefficient. The line passing through each dot represents an error bar of the associated 95% confidence interval.
+
+```{r}
+ggcoef(lm_faktor, vline = FALSE, exclude_intercept = TRUE,
+  errorbar_height = .2, color = "blue") +
+  scale_x_continuous(labels = scales::dollar) +
+  labs(x = "Estimated increase in wage", y = "")
+```
+
+#### Caution: Ordered Factors
+
+It is important to note that when using `summary()` on an `lm` object, the coefficients of each level of the factor variable are only displayed when the factor is **not ordered**. For an **ordered** factor the orthogonal polynomial contrasts are displayed. The `L` gives a measure of the linear trend, `Q` and `C` specify quadratic and cubic terms and so forth. You may use the function `is.ordered()` to check your categorical varables before running your regression model.
+
+```{r}
+lm_faktor_ordered <- lm(wage ~ factor(education, ordered = TRUE) + age, data=Wage)
+summary(lm_faktor_ordered)
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+As with dummy variables the coefficients of categorial variables are interpreted with respect to a **reference group**, which is formed here by respondents with an `education` level of `< HS Grad`. For example, respondents with  an `education` level of `Advanced Degree` earn, compared to the base group, a `wage` which is on average **$`r format(round(lm_faktor$coefficients[5]), nsmall=0, big.mark=",")`** higher (in the scatterplot this is reflected by the distance between the red line and the purple line).
+
+Again note that the effect of the respondents' `age` on their `wage` is independent of their `education` (**$`r format(round(lm_faktor$coefficients[6]), nsmall=0)`**)! 
+
+*****
+
+## 4. Adding interactions
+
+With an interaction (term) you can model that the influence of one regressor $x_i$ on the dependent variable $y$ systematically depends on **another** regressor $x_j$. For example, in the above section the influence of an respondent's `age` on her `wage` was independent of her `education`. With an interaction of `age` and `education` you would be able to see if there is any codependence between them. There are three different types of interactions that will be covered in this section.
+
+### 4.1 Two binary variables {.tabset .tabset-fade .tabset-pills}
+
+In the first model I am regressing the respondents' `wage` on the variables `jobclass` and `healt_ins`. Remember that binary variables (dummies) have exactly two levels.
+
+#### Model
+
+In the `formula =` argument of function `lm()` interactions can be specified with the `*` operator. This operator also adds the **base effect** of each variable to the model. Alternatively you can use the operator `:`, which only includes the interaction term. If you want to include the base effects in your model as well, the variables have to be explicitly specified. Below I've specified both variants.
+
+```{r}
+lm_interact_bin <- lm(wage ~ jobclass * health_ins, data = Wage)
+lm_interact_bin <- lm(wage ~ jobclass + health_ins + jobclass:health_ins, data = Wage)
+summary(lm_interact_bin)
+```
+
+#### Line Plot
+
+The interaction between two binary variables can be visualized with a line plot. At first, I am caluculating the groupwise means of `wage` for each combination of the levels of `jobclass` and `health_ins`. Then I am assigning `health_ins` to the x-axis and the mean of `wage` to the y-axis. For each level of `jobclass` a separate line is drawn. The slopes of the two lines differ! 
+
+```{r}
+Wage %>%
+  group_by(jobclass, health_ins) %>%
+  summarise(mean_wage = mean(wage, na.rm = T)) %>%
+  ggplot(aes(x = health_ins, y = mean_wage, group = jobclass)) +
+  geom_line(aes(color = jobclass), size = 1.2) +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Health insurance?", y = "Wage (mean)", color = "Type of job")
+```
+
+#### Contingency Table (DiD)
+
+Sometimes this type of interaction is also called a **differences-in-differences estimator** as it measures the difference of the difference within each dummy variable regarding the outcome `wage`. This can be shown with a contingency table.
+
+Jobclass | Health insurance | No health insurance  | Difference | DiD
+-------- | ---------------- | -------------------- | ---------- | ---
+Industrial | \$`r format(round(lm_interact_bin$coefficients[1]), nsmall=0, big.mark=",")` | \$`r format(round(lm_interact_bin$coefficients[1]+lm_interact_bin$coefficients[3]), nsmall=0, big.mark=",")` | \$`r format(round(lm_interact_bin$coefficients[1] - (lm_interact_bin$coefficients[1]+lm_interact_bin$coefficients[3])), nsmall=0, big.mark=",")` | \$`r format(round((lm_interact_bin$coefficients[1] - (lm_interact_bin$coefficients[1]+lm_interact_bin$coefficients[3])) - ((lm_interact_bin$coefficients[1] + lm_interact_bin$coefficients[2]) - (lm_interact_bin$coefficients[1] + lm_interact_bin$coefficients[2] + lm_interact_bin$coefficients[3] + lm_interact_bin$coefficients[4]))), nsmall=0, big.mark=",")`
+Information | \$`r format(round(lm_interact_bin$coefficients[1] + lm_interact_bin$coefficients[2]), nsmall=0, big.mark=",")` | \$`r format(round(lm_interact_bin$coefficients[1] + lm_interact_bin$coefficients[2] + lm_interact_bin$coefficients[3] + lm_interact_bin$coefficients[4]), nsmall=0, big.mark=",")` | \$`r format(round((lm_interact_bin$coefficients[1] + lm_interact_bin$coefficients[2]) - (lm_interact_bin$coefficients[1] + lm_interact_bin$coefficients[2] + lm_interact_bin$coefficients[3] + lm_interact_bin$coefficients[4])), nsmall=0, big.mark=",")`
+
+### {.unlisted .unnumbered .toc-ignore}
+
+First, in this specific model the `intercept` has a meaningful interpretation! It repesents the mean for the **reference group** of each dummy variable. Respondents with `health_ins`urance employed in the `Industrial` sector have on average a `wage` of **$`r format(round(lm_interact_bin$coefficients[1]), nsmall=0, big.mark=",")`**.
+
+The coefficient of `jobclass` measures the average change of `wage` for `health_ins`ured respondents between the sectors `Information` and `Industrial`. Respondents working in the `Industrial` sector form the **reference group**, hence the `wage` for `health_ins`ured respondents working in the `Information` sector changes on average by **$`r format(round(lm_interact_bin$coefficients[2]), nsmall=0, big.mark=",")`**.
+
+The coefficient of `health_ins` measures the average change of `wage` for respondents working in the `Industrial` sector depending on whether they have a health insurance or not. Having no health insurance changes their `wage` on average by **$`r format(round(lm_interact_bin$coefficients[3]), nsmall=0, big.mark=",")`**.
+
+The interaction between the two dummy variables measures the job-specific difference between respondents with and without `health_ins`urance. Having no `health_ins`urance has a stronger (negative) effect on the respondents' `wage` in the `Information` sector which is on average **$`r format(round(lm_interact_bin$coefficients[4]), nsmall=0, big.mark=",")`**. This can also be seen in the line plot as the slope of the `Information` sector is a little bit more steep. However, this interaction is not statistically significant!
+
+*****
+
+### 4.2 Binary and continuous variable {.tabset .tabset-fade .tabset-pills}
+
+In the next model the respondents' `wage` is regressed on the dummy variable `health_ins` and the continuous variable `age` as well as the interaction term between both variables. In contrast to the interaction term between two binary variables there are some differences regarding its specification and interpretation. Initially, I am centering `age` around its mean value in order to ease the interpretation of the model coefficients.
+
+#### Model
+
+To mean-center the respondents' `age` you have two options. Either you do it beforehand and add this variable to the `Wage` dataset or you specify it directly within the `formula =` argument of function `lm()`. The latter equires to wrap the expression inside the function `I()`. Otherwise a minus sign (`-`) is interpreted as removing a parameter from the model.
+
+```{r}
+lm_interact_bin_con <- lm(wage ~ health_ins*I(age-mean(age)), data = Wage)
+summary(lm_interact_bin_con)
+```
+
+#### Scatterplot
+
+Again, the slopes of the two regression lines differ. The fitted line representing respondents without health insurance is more steep!
+
+```{r}
+ggplot(broom::augment(lm_interact_bin_con),
+       aes(x = `I(age - mean(age))`, y = wage, color = health_ins)) +
+  geom_point(alpha = 0.5) +
+  geom_line(aes(y = .fitted), size = 1) +
+  geom_vline(xintercept = 0) +
+  scale_y_continuous(labels = scales::dollar) +
+  scale_color_manual(values = c("darkgreen", "red")) +
+  labs(x = "Mean centered age (0 = 42 years)", y = "Wage", color = "Health insurance?")
+```
+
+#### Conditional Effects Plot
+
+The **conditional effects plot** shows regression lines for different combinations of the regressors used in the model. The effect of each variable can be obtained via the distance between the lines and their slope. Centering the age around its mean value is not as important here as it is for the interpretation of the model output. First we have to create a dataset with different values of `age` and different states of `health_ins`urance. Then I compute the linear predictions using the specified interaction model as well as corresponding standard errors. With function `geom_ribbon()` I add the confidence bands around the regression lines for each stat of `health_ins`urance. From the plot we can see that the increase of `wage` along increasing values of `age` is stronger for respondents without `health_ins`urance than for respondents with it.
+
+```{r}
+tibble(
+  age = rep(seq(from = 20, to = 80, by = 5), 2),
+  health_ins = factor(rep(c("1. Yes", "2. No"), each = 13))
+  ) %>%
+  mutate(fit = predict(lm_interact_bin_con, newdata = ., type = "response"),
+         se = predict(lm_interact_bin_con, newdata = ., type = "response", se = TRUE)$se.fit,
+         ll = fit - (1.96 * se), ul = fit + (1.96 * se)) %>%
+  ggplot(aes(x = age, y = fit)) + 
+  geom_ribbon(aes(ymin = ll, ymax = ul, fill = health_ins), alpha = 0.2) + 
+  geom_line(aes(colour = health_ins), size = 1) +
+  scale_y_continuous(labels = scales::dollar) +
+  scale_color_manual(values = c("darkgreen", "red")) +
+  scale_fill_manual(values = c("darkgreen", "red")) +
+  labs(x = "Age", y = "Predicted wage", fill = "Health insurance?", color = "Health insurance?")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+For respondents of average `age` the coefficient of `health_ins` measures the average change of `wage` when shifting from respondents with `health_ins`urance to respondents without it (**$`r format(round(lm_interact_bin_con$coefficients[2]), nsmall=0, big.mark=",")`**).
+
+Raising the `age` of a respondent by **1 year** (above the average age of approximately 42 years) leads to an average change of `wage` by **$`r format(round(lm_interact_bin_con$coefficients[3], 2), nsmall=2, big.mark=",", decimal.mark = ".")`**.
+
+The interaction term shows the effect of `age` on `wage` depending on the health insurance status of the respondent. Raising the `age` of respondents without `health_ins`urance by **1 year** above the mean-centered age, leads to an average change of their `wage` by additional **$`r format(round(lm_interact_bin_con$coefficients[4], 2), nsmall=2, big.mark=",", decimal.mark=".")`**. Hence, with increasing `age` the `wage` of respondents without `health_ins`urance rises faster than the `wage` of respondents with `health_ins`urance.
+
+*****
+
+### 4.3 Two continuous variables {.tabset .tabset-fade .tabset-pills}
+
+For the last model, I am regressing the respondents' `wage` on the continuous variable `age` and its  **quadratic term**. This is in fact an interaction between `age` and `age`. However, different continuous variables can be interacted with each other and the quadratic term is only a special case of this interaction.
+
+Mathematically, a squared term shows marginal effects of $x_i$ on $y$. 
+
+Consider the model y = β~0~ + β~1~x + β~2~x^2^. At x = -β~1~/2β~2~ is either a:
+  
+  + maximum: if β~2~ < 0 (inverse U-shape)
+  + minimum: if β~2~ > 0 (U-shape)
+
+#### Model
+
+In the `formula =` argument of function `lm()` the quadratic term has to be wrapped in the function `I()` as the operator `^` has a special meaning in R.
+
+```{r}
+lm_interact_con_con <- lm(wage ~ age + I(age^2), data = Wage)
+summary(lm_interact_con_con)
+```
+
+#### Scatterplot
+
+Plotting the fitted values of this model against `age` shows the **inverse U-shaped curve** due to the inclusion of the squared term. I also added predicted values for `age` outside the boundaries of the Wage dataset to show the intersection with the y-axis (`intercept`).
+
+```{r}
+age.df <- tibble(age = 0:100)
+age.df$yhat <- predict(lm_interact_con_con, newdata = age.df)
+
+ggplot(data = Wage, aes(x = age, y = wage)) +
+  geom_point() +
+  geom_line(data = age.df,
+       aes(x = age, y = yhat), size = 1, color = "red") +
+  scale_x_continuous(expand = expansion(mult = c(0, 0))) +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Age", y = "Wage")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+The coefficent of `age` shows the effect of increasing the respondents age by one additional year on the average change of their `wage`. However, this coefficient only applies to respondents aged 1 year (from zero years)! So conceptually their `wage` increases by **$`r format(round(lm_interact_con_con$coefficients[2]+lm_interact_con_con$coefficients[3]*1), nsmall=0, big.mark=",")`**. The lowest `age` of respondents present in the dataset is 18 years. Raising their `age` from 18 to 19 years leads to a predicted increase of `wage` by **$`r format(round(lm_interact_con_con$coefficients[2]+lm_interact_con_con$coefficients[3]*18), nsmall=0, big.mark=",")`**.
+
+As the coefficient of the quadratic term is negative, with each additional year of `age` its effect declines. Hence, with increasing values of `age` the increase of `wage` is reduced. Raising the `age` of 30-year old respondents to 31 years leads to an increase of `wage` by only **$`r format(round(lm_interact_con_con$coefficients[2]+lm_interact_con_con$coefficients[3]*30), nsmall=0, big.mark=",")`**.
+
+Also, the inflection point can be calculated. It occurs at **`r sprintf("%.2g", abs(lm_interact_con_con$coefficients[2]/(2*lm_interact_con_con$coefficients[3])))`** years. 
+
+*****
+
+### 4.4 Three-way interactions {.tabset .tabset-fade .tabset-pills}
+
+With statistical software more complicated models can easily be calculated. As the title of this sections suggests, three-way interactions create a ménage à trois between regressors. Starting from the interaction between `health_ins` and `age` I am adding `jobclass` to the mix. This is hence an interaction between a continuous variable and two dummy variables.
+
+#### Model
+
+The interaction is specified as seen in the section before with the `*` operator. Again I'm centering `age` around its mean vaue. The function `tidy` in R package `broom` reduces the size of the regression output we usually create with function `summary()`. We've already discussed the interaction between `age` and `health_ins`urance in section 4.2. Now the only thing that changes is that also `jobclass` has to be taken into account. Hence, there is an interaction of it between `age` and `health_ins`urance as well as an interaction term of all three variables (row 8)
+
+```{r}
+lm_interact_3way <- lm(wage ~ health_ins*I(age-mean(age))*jobclass, data = Wage)
+tidy(lm_interact_3way)
+```
+
+#### Conditional Effects Plot
+
+Especially the construction of an appropriate dataset to draw the CEP is a bit complex with three different variables. I'm using the function `rep_along()` from R package `purrr` to nest the categories of `joblcass` inside the categories of `health_ins`urance. 
+
+```{r cep2}
+tibble(
+  age = rep(seq(from = 20, to = 80, by = 5), 4),
+  health_ins = factor(rep(c("1. Yes", "2. No"), each = 26)),
+  jobclass = factor(rep_along(age, c("1. Industrial", "2. Information")))
+  ) %>%
+  mutate(fit = predict(lm_interact_3way, newdata = ., type = "response"),
+         se = predict(lm_interact_3way, newdata = ., type = "response", se = TRUE)$se.fit,
+         ll = fit - (1.96 * se), ul = fit + (1.96 * se)) %>%
+  ggplot(aes(x = age, y = fit)) + 
+  geom_ribbon(aes(ymin = ll, ymax = ul, fill = health_ins), alpha = 0.2) + 
+  geom_line(aes(colour = health_ins), size = 1) +
+  facet_wrap(. ~ jobclass) +
+  scale_y_continuous(labels = scales::dollar) +
+  scale_color_manual(values = c("darkgreen", "red")) +
+  scale_fill_manual(values = c("darkgreen", "red")) +
+  labs(x = "Age", y = "Predicted wage", fill = "Health insurance?", color = "Health insurance?")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+Let us first take a look at the results within each level of `jobclass`. In the `Industrial` sector the slopes for each level of `health_ins`urance are nearly identical. Hence, a respondent's `wage` increases along increasing values of `age` and it doesn't really matter whether she is `health_ins`ured or not. In the `Information` sector, however, a respondent's `wage` increases stronger when she has no `health_ins`urance along increasing values of `age`. Hence, this phenomenon is rather attributable to respondents employed in this sector. You find this in row #6 of the regression output. The p-value almost indicates significane at the 5%-level.
+
+Futhermore we can make comparisons between the levels of `jobclass`. The `wage` of a respondent without `health_ins`urance increases at a similar rate in the `Industrial` and `Information` sector (the slopes are nearly the same) along increasing values of `age`.
+
+Also, compare this plot to the one we've created in section 4.2.
+
+*****
+
+## 5. Polynomials {.tabset .tabset-fade .tabset-pills}
+
+Polynomials extend the linear regression model by raising the included regressors to a higher power. For example, a cubic regression model uses $x_i$, $x_i^2$ and $x_i^3$ as regressors. This is a fairly easy way to model non-linear relationships in the data.
+
+### Orthogonals
+
+The function `poly()` can be used to apply polynomials in the `formula =` argument of function `lm()`. In the model below, I am regressing the respondents' wage on the third order polynomial of their `age`. By default the function `poly()` creates **orthogonals** instead of raw polynomials. This does not change the fitted values but has the advantage that you can see whether a certain order in the polynomial significantly improves the regression over the lower orders.
+
+```{r}
+lm_poly_ort <- lm(wage ~ poly(age, 3), data = Wage)
+summary(lm_poly_ort)
+```
+
+### Digression: Choosing The Order
+
+Using an ANOVA we can make a decision which polynomial best fits the data. The F-test tests the null hypothesis whether the restricted model **M~1~** is sufficient to explain the data opposed to a more complex model **M~2~**.
+
+```{r}
+model1 <- lm(wage ~ age, data = Wage)
+model2 <- lm(wage ~ poly(age, 2), data = Wage)
+model3 <- lm(wage ~ poly(age, 3), data = Wage)
+model4 <- lm(wage ~ poly(age, 4), data = Wage)
+model5 <- lm(wage ~ poly(age, 5), data = Wage)
+
+anova(model1, model2, model3, model4, model5)
+```
+
+The model with the second order polynomial is better than the simple linear model (the p value is close to zero). Also the cubic model with a third order polynomial performs better than the quadratic model. The model with a fourth order polynomial is only significant at the 10% level whereas the fifth order polynomial does not show any improvement. Also take into consideration that when using models with higher order polynomials you sacrifice the interpretability of the model!
+
+### Raw Polynomials
+
+When using **raw polynomials** you obtain regression coefficients that are identical to using the second and third power of a regressor.
+
+```{r}
+lm_poly_raw <- lm(wage ~ poly(age, 3, raw = TRUE), data = Wage)
+lm_poly_check <- lm(wage ~ age + I(age^2) + I(age^3), data = Wage)
+
+tibble(coefficient = names(coef(lm_poly_check)),
+       raw_polynomial = coef(lm_poly_raw),
+       check = coef(lm_poly_check))
+```
+
+### Scatterplot
+
+At last I am creating a new dataset (`predicted.df`) with the predicted values of `wage` for polynomials of different orders.
+
+```{r}
+predicted.df <- 
+  tibble(quadratic.fit = predict(lm(wage ~ poly(age, 2), data = Wage), Wage),
+         cubic.fit = predict(lm(wage ~ poly(age, 3), data = Wage), Wage),
+         quartic.fit = predict(lm(wage ~ poly(age, 4), data = Wage), Wage),
+         quintic.fit = predict(lm(wage ~ poly(age, 5), data = Wage), Wage),
+         age= Wage$age
+         )
+
+ggplot(Wage, aes(x = age, y = wage)) +
+  geom_point(alpha=0.3) +
+  geom_line(data=predicted.df, aes(x=age, y = quadratic.fit, col ="2fit"), size = 1) +
+  geom_line(data=predicted.df, aes(x=age, y = cubic.fit, col="3fit"), size = 1) +
+  geom_line(data=predicted.df, aes(x=age, y = quartic.fit, col="4fit"), size = 1) +
+  geom_line(data=predicted.df, aes(x=age, y = quintic.fit, col="5fit"), size = 1) +
+  scale_y_continuous(labels = scales::dollar) +
+  scale_color_manual(values = c("2fit" = "green", "3fit" = "red", 
+                                "4fit" = "blue", "5fit" = "yellow"),
+                     labels = c("2nd order", "3rd order",
+                                "4th order", "5th order")) +
+  labs(x = "Age", y = "Wage", color="Polynomial")
+```
+
+The regression lines of the higher order polynomials don't seem to fit the data much than a model with just a quadratic term (2nd order polynomial).
+
+## {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+## 6. Step functions {.tabset .tabset-fade .tabset-pills}
+
+Step function separate the range of a continuous variable in `K` different regions. Hence, a categorical (or factor) variable is created which fits stepwise constant functions to the data.
+
+### Scatterplot
+
+Step functions can be applied by using the function `cut()` in the `formula =` argument of `lm()`. The argument `breaks =` controls the number of step functions that are created. Here, I am cutting the variable `age` into 3 different regions. With function `table()` I check beforehand how many observations fall within each created region.
+
+```{r}
+table(cut(Wage$age, 3))
+```
+
+```{r}
+lm_step <- lm(wage ~ cut(age, breaks = 3), data = Wage)
+summary(lm_step)
+```
+
+### Visualization
+
+Below I plot the steps in the fitted regression lines.
+
+```{r}
+tibble(
+  age = Wage$age,
+  wage = Wage$wage,
+  yhat = predict(lm_step, Wage)
+  ) %>%
+  ggplot(aes(x = age, y = wage)) +
+  geom_point() +
+  geom_line(aes(y = yhat), size = 1, col = "red") +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Age", y = "Wage")
+```
+
+## {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+## 7. Regression Splines 
+
+Instead of fitting a higher order polynomial over all values of an regressor $x_i$, regression splines apply single polynomials of lower order on different ranges of $x_i$. The points, where the coefficients change, are called **knots**. The more knots you use, the more flexible is the resulting fit.
+
+*****
+
+### 7.1 Piecewise polynomial {.tabset .tabset-fade .tabset-pills}
+
+At first, a piecewise cubic polynomial with a single knot at respondents `age`d 50 years is applied. Therefore, I am running two regressions each on a subset of the data with respondents less than 50 years old and respondents that are at least 50 years old.
+
+*Note:* The step functions described in the previous chapter are piecewise polynomials of order zero!
+
+#### Model
+
+```{r}
+lm_piecewise_poly1 <- lm(wage ~ I(age) + I(age^2) + I(age^3),
+                         data = Wage,
+                         subset = age < 50)
+
+lm_piecewise_poly2 <- lm(wage ~ I(age) + I(age^2) + I(age^3),
+                         data = Wage,
+                         subset = age >= 50)
+```
+
+#### Scatterplot
+
+```{r}
+tibble(
+  age = Wage$age,
+  wage = Wage$wage,
+  .fitted1 = ifelse(age < 50, predict(lm_piecewise_poly1, Wage), NA),
+  .fitted2 = ifelse(age >= 50, predict(lm_piecewise_poly2, Wage), NA)
+  ) %>%
+  ggplot(aes(x = age, y = wage)) +
+  geom_point() +
+  geom_line(aes(y = .fitted1), size = 1, col = "red") +
+  geom_line(aes(y = .fitted2), size = 1, col = "green") +
+  geom_vline(xintercept = 50, linetype = "dashed",
+             size = 1, color = "blue") +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Age", y = "Wage")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 7.2 Cubic spline {.tabset .tabset-fade .tabset-pills}
+
+With the R package `splines` the function `bs()` can be used to fit **regression splines**. The argument `knots = ` controls the number and position of the knots. Alternatively, argument `df =` might be used to place the knots at uniform quantiles of the data. The argument `degree =` determines the order of the spline.
+
+#### Model
+
+```{r}
+lm_cubic_spline_bs <-lm(wage ~ bs(age, knots = c(50), degree = 3), data = Wage)
+summary(lm_cubic_spline_bs)
+```
+
+#### Scatterplot
+
+```{r}
+tibble(age = Wage$age,
+       wage = Wage$wage,
+       .fitted = predict(lm_cubic_spline_bs, Wage)
+       ) %>%
+  ggplot(aes(x = age, y = wage)) +
+  geom_point() +
+  geom_line(aes(y = .fitted), size = 1, col = "red") +
+  geom_vline(xintercept = 50, linetype = "dashed", size = 1, color = "blue") +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Age", y = "Wage")
+```
+
+#### Interaction term
+
+Also, a cubic spline can be created with an interaction term. This leads to a disonctinuity at the third derivate at the knot. The function remains continuous in the first and secod derivatives. The discontinuity is at the knot of 50 years, which is not visible.
+
+```{r}
+lm_cubic_spline_int <- Wage %>%
+  mutate(threshold = ifelse(age >= 50, 1, 0)) %$%
+  lm(wage ~ age + I(age ^ 2) + I(age ^ 3) + threshold:I((age - 50) ^ 3))
+
+summary(lm_cubic_spline_int)
+```
+
+#### Scatterplot
+
+```{r}
+tibble(age = Wage$age,
+       wage = Wage$wage,
+       .fitted = predict(lm_cubic_spline_int, Wage)
+       ) %>%
+  ggplot(aes(x = age, y = wage)) +
+  geom_point() +
+  geom_line(aes(y = .fitted), size = 1.5, col = "red") +
+  geom_vline(xintercept = 50, linetype = "dashed", size = 1.5, color = "blue") +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Age", y = "Wage")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 7.3 Linear spline {.tabset .tabset-fade .tabset-pills}
+
+A linear spline is a polynomial of order zero.
+
+#### Model
+
+```{r}
+lm_linear_spline <- Wage %>%
+  mutate(threshold = ifelse(age >= 50, 1, 0)) %$% 
+  lm(wage ~ threshold*I(age-50))
+
+summary(lm_linear_spline)
+```
+
+#### Scatterplot
+
+```{r}
+Wage %>% 
+  select(age, wage) %>% 
+  mutate(threshold = as.factor(ifelse(age >= 50, 1, 0))) %>% 
+  ggplot(aes(x = age, y = wage, color = threshold)) +
+  geom_point(color="grey") + 
+  geom_smooth(method = "lm", se = FALSE) + 
+  geom_vline(xintercept = 50, linetype = "dashed", size = 1, color = "blue") +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(x = "Age", y = "Wage") +
+  guides(color = FALSE)
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 7.4 Natural spline {.tabset .tabset-fade .tabset-pills}
+
+Splines can have high variance at the regressors' tails of the distribution (when x has either very small or very large values). A natural spline is a regression spline with additional constraints at the borders. There the function is linear, producing estimates that are more stable.
+
+#### Model
+
+Natural splines can be applied with function `ns()` in the R package `splines`. I am using 4 degrees of freedom in this example. For comparison, I also compute a B-spline. 
+
+```{r}
+lm_spline_natural <- lm(wage ~ ns(age ,df = 4), data = Wage)
+
+lm_spline_base <- lm(wage ~ bs(age, df = 4), data = Wage)
+```
+
+#### Scatterplot
+
+```{r}
+tibble(age = Wage$age,
+       wage = Wage$wage,
+       fitted.base =  predict(lm_spline_base, se=T, Wage)$fit,
+       se.base = predict(lm_spline_base, se=T, Wage)$se.fit,
+       fitted.natural =  predict(lm_spline_natural, se=T, Wage)$fit,
+       se.natural = predict(lm_spline_natural, se=T, Wage)$se.fit
+       ) %>%
+  ggplot(aes(x = age, y = wage)) +
+  geom_point(color="grey") +
+  geom_line(aes(y = fitted.base, color = "base"), size = 1) +
+  geom_line(aes(y = fitted.base + 2*se.base), size = 0.5, col = "red", linetype="dashed") +
+  geom_line(aes(y = fitted.base - 2*se.base), size = 0.5, col = "red", linetype="dashed") +
+  geom_line(aes(y = fitted.natural, color = "natural"), size = 1) +
+  geom_line(aes(y = fitted.natural + 2*se.natural), size = 0.5, col = "blue", linetype="dashed") +
+  geom_line(aes(y = fitted.natural - 2*se.natural), size = 0.5, col = "blue", linetype="dashed") +
+  scale_y_continuous(labels = scales::dollar) +
+  scale_color_manual(values = c('base' = 'darkblue', 'natural' = 'red'),
+                     labels = c("cubic spline", "natural cubic spline")) +
+  labs(x = "Age", y = "Wage", color = "") +
+  theme(legend.position = c(0.8, 0.8))
+```
+
+#### Digression: Choosing the number and position of knots
+
+A regression spline is most flexible in regions with many knots because the polynomial coefficients can change rapidly. Hence, more knots are placed in regions where the function is assumed to have the most variation and less knots are placed in the region where the function is more stable. Although this might work, in practice knots are commonly placed uniformly. This is done by specifying the desired degrees of freeom and the knots are placed at uniform quantiles of the data.
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+## 8. Inverse functions {.tabset .tabset-fade .tabset-pills}
+
+Althoug they may be not frequently applied in practice, inverse functions are easy to specify.
+
+### Model
+
+I am regressing the respondents' `wage` on the inverse of `age`. The calculation of the inverse is specified within function `I()` since the `/` operator has special meaning in the formula of `lm()`. 
+A negative algebraic sign of the coefficient of the inverted `age` means a positive impact on `wage` (et vc. vs.).
+
+```{r}
+lm_age_inverse <- lm(wage ~ I(1 / age), data = Wage)
+summary(lm_age_inverse)
+```
+
+Below you find the estimates of the original estimates without transforming `age`.
+
+```{r}
+lm_age_normal  <- lm(wage ~ age, data = Wage)
+summary(lm_age_normal)
+```
+
+### Scatterplot
+
+```{r}
+ggplot(broom::augment(lm_age_inverse), 
+       aes(x = `I(1/age)`, y = wage)) +
+ geom_point(alpha=0.3) +
+ geom_line(aes(y = .fitted), size = 1) +
+ scale_y_continuous(labels = scales::dollar) +
+ labs(x = "Age (inverted)", y = "Wage", color="")
+```
+
+## {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+## References
