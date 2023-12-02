@@ -1,6 +1,6 @@
 library(tidyverse)
 
-root <- "linear-regression-2/"
+root <- "data-analysi/linear-regression-2/"
 
 rmd_path <- paste0(root,"linear-regression-2.Rmd")
 
