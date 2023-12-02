@@ -1,0 +1,533 @@
+---
+title: "R Tutorial: Difference-in-Differences"
+subtitle: "Replicating the @card_krueger_1994 minimum wage study"
+author: 
+  - name: "Philipp Leppert"
+date: "18.09.2020"
+output: 
+  html_document:
+    anchor_sections: false
+    highlight: default
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    #code_folding: hide
+bibliography: references.bib 
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, fig.align = "center",
+                      comment = NA)
+
+# Pakete Layout
+library(klippy)
+library(details)
+
+# Pakete Analyse
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(sjlabelled)
+library(ggrepel)
+library(scales)
+library(ggpubr)
+library(plm)
+library(lmtest)
+
+# ggplot theme
+theme_set(theme_bw())
+
+# Data 
+card_krueger_1994 <- readRDS("card_krueger_1994.rds")
+```
+
+```{r klippy, echo=FALSE, include=TRUE}
+klippy::klippy()
+```
+
+<style>
+#TOC {
+  background:  url('https://raw.githubusercontent.com/philippleppert/rpubs/main/DiD.png');
+  background-size: 180px 180px;
+  padding-top: 180px !important;
+  background-repeat: no-repeat;
+  background-position: center top;
+}
+</style>
+
+******
+
+Reading time: `r format(ceiling(wordcountaddin::word_count()/200), nsmall=0)` minutes (`r format(wordcountaddin::word_count(), nsmall=0, big.mark=",")` words)
+
+*****
+
+## 1. Introduction
+
+In economics, researchers are often using natural or quasi experimental setting as randomized experiments can rarely be conducted. With them one can study a given change in the environment, which allows to split the population at hand into a treatment and control group. The split requires some kind of border, which might be:
+
+* in time
+
+* in a geographical sense
+
+*	or with respect to some threshold value
+
+The simple (or naïve) way to examine a natural experiment is the computation of *first differences* in the outcome variable (Y), i.e. a before-after comparison.
+
+Example:
+
+* observations from regions that were prone to a (local) policy intervention vs. observations from regions were no policy intervention took place
+
+* observations from a region before and after the (local) policy intervention
+
+The main assumption is that **without the change in the natural environment the outcome variable would have remained constant**!
+
+******
+
+## 2. Difference-in-differences theory
+
+The DiD approach includes a before-after comparison for a treatment and control group. This is a combination of:
+
+* a cross-sectional comparison (= compare a sample that was treated to an non-treated control group)
+
+*	a before-after comparison(= compare treatment group with itself, before and after the treatment)
+
+The before-after difference in the treatment group gets a correction, by accounting for the before-after difference in the control group, eliminating the trend problem. To obtain an unbiased estimate of the treatment effect one needs to make a parallel trend assumption. That means without the change in the environment, the change in the outcome variable would have been the same for the two groups (counterfactual outcome).
+
+The DiD approach requires panel data (i.e. multiple observations on the same individual over time).
+
+### 2.1 Validity of the DiD estimator
+
+The validity of the DiD approach is closely related to the similarity of the treatment and control group. Hence, some plausibility checks should be conducted:
+
+*	compute Placebo-DiD for periods without a change in the environment
+
+*	for (longer) time series: check and demonstrate the parallel time trends
+
+*	use an alternative control group (if available): the estimate should be the same
+
+*	replace Y by an alternative outcome which is definitely independent of the treatment (the DiD estimator should be 0)
+
+******
+
+### 2.2 Observable covariates
+
+In a randomized experiment the treatment and control group are identical by design. Hence, the DiD estimator is unbiased. For a natural experiment it is useful to compare the observable characteristics of individuals in the treatment and control group. However, they do not have to be identical! In a linear regression approach one should consider interactions that control for structural changes between the treatment and control group over time.
+
+******
+
+### 2.3 Common problems
+
+* Ashenfelter Dip 
+  + over-estimation of the treatment effect
+  + treatment under study is specific to a particular target group
+
+* Estimate depending on functional form
+  + consider the difference in logs
+
+* Long-term effects vs. reliability
+  + parallel trends are more plausible over shorter time period than over long time period
+  + but from policy point of view: interest in long-term effect
+
+
+* Heterogenous effects
+  + it is possible to apply the DiD estimator, if both groups are affected by a policy change, but with different doses
+  + but: DiD estimator may be misleading, if the intensity of the response is different between the two groups
+
+
+******
+
+## 3. Replication
+
+In this section I am replicating a study by David Card and Alan B. Krueger about the effect of a raise in minimum wages on employment. Conventional economic theory suggests that in a labour market with perfect competition an **increase in the minimum wage** leads to an **increase in unemployment**. In April 1992, the U.S. state of New Jersey (NJ) raised the minimum wage from $4.25 to $5.05. @card_krueger_1994 use a DiD approach and show that this increase in minimum wages led to an **increase in employment** in the sector of fast food restaurants. The control group in their settting is the neighbouring U.S. state of Pennsylvania (PA), which was not subject to this policy change The authors conducted a survey before and after the raise of the minimum wage with a representative sample of fast food restaurants in NJ and PA. This setting can be regarded as quasi experimental, as both states are not identical in many aspects and the legislative procedure, in order the raise the minimum wage, was not initiated at random.
+
+The following R packages are required for this tutorial.
+
+```{r}
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(tidyr)
+library(sjlabelled)
+library(ggrepel)
+library(scales)
+library(ggpubr)
+library(plm)
+library(lmtest)
+```
+
+### 3.1 The dataset {.tabset .tabset-fade .tabset-pills}
+
+#### Raw data
+
+The raw data of the study can be accessed [here](https://davidcard.berkeley.edu/data_sets.html){target="_blank"}. At first, I am downloading the data directly into RStudio and store the variable names and labels from the *codebook* included in the .zip file in separate vectors. The data is then read with function `read_table2()` from R package `readr`. At the moment, it has no column names! 
+
+```{r, echo=T, eval=F}
+# Temporary file and path
+tfile_path <- tempfile()
+tdir_path <- tempdir()
+
+# Download zip file
+download.file("http://davidcard.berkeley.edu/data_sets/njmin.zip", 
+              destfile = tfile_path)
+
+# Unzip
+unzip(tfile_path, exdir = tdir_path)
+
+# Read codebook
+codebook <- read_lines(file = paste0(tdir_path, "/codebook"))
+
+# Generate a vector with variable names
+variable_names <- codebook %>%
+  `[`(8:59) %>% # Variablennamen starten bei Element 8 (sheet)
+  `[`(-c(5, 6, 13, 14, 32, 33)) %>% # Elemente ohne Variablennamen entfernen
+  str_sub(1, 8) %>% # längster Variablenname enthält 8 Zeichen
+  str_squish() %>% # Whitespaces entfernen
+  str_to_lower() # nur Kleinbuchstaben verwenden
+
+# Generate a vector with variable labels
+variable_labels <- codebook %>%
+  `[`(8:59) %>% # variable names start at element 8 (sheet)
+  `[`(-c(5, 6, 13, 14, 32, 33)) %>% # remove elements w/o variable names
+  sub(".*\\.[0-9]", "", .) %>%
+  `[`(-c(5:10))  %>% # these elements are combined later on
+  str_squish() # remove white spaces
+  
+# Region
+variable_labels[41] <- "region of restaurant"
+
+# Read raw data
+data_raw <- read_table2(paste0(tdir_path, "/public.dat"),
+                        col_names = FALSE)
+```
+
+#### Cleaned data
+
+Next, I am cleaning the data to make it ready for an analysis! I am assigning the stored variable names from the *codebook* to each column of the raw dataset and to certain dummy and catergorical variables I am assigning meaningful value labels based on the *codebook*.
+
+```{r, echo=T, eval=F}
+# Add variable names
+data_mod <- data_raw %>%
+  select(-X47) %>% # remove empty column
+  `colnames<-`(., variable_names) %>% # Assign variable names
+  mutate_all(as.numeric) %>% # treat all variables as numeric
+  mutate(sheet = ifelse(sheet == 407 & chain == 4, 408, sheet)) # duplicated sheet id 407
+
+# Process data (currently wide format)
+data_mod <- data_mod %>%
+  # chain value label
+  mutate(chain = case_when(chain == 1 ~ "bk",
+                           chain == 2 ~ "kfc",
+                           chain == 3 ~ "roys",
+                           chain == 4 ~ "wendys")) %>%
+  # state value label
+  mutate(state = case_when(state == 1 ~ "New Jersey",
+                           state == 0 ~ "Pennsylvania")) %>%
+  # Region dummy
+  mutate(region = case_when(southj == 1 ~ "southj",
+                            centralj == 1 ~ "centralj",
+                            northj == 1 ~ "northj",
+                            shore == 1 ~ "shorej",
+                            pa1 == 1 ~ "phillypa",
+                            pa2 == 1 ~ "eastonpa")) %>%
+  # meals value label
+  mutate(meals = case_when(meals == 0 ~ "none",
+                           meals == 1 ~ "free meals",
+                           meals == 2 ~ "reduced price meals",
+                           meals == 3 ~ "both free and reduced price meals")) %>%
+  # meals value label
+  mutate(meals2 = case_when(meals2 == 0 ~ "none",
+                            meals2 == 1 ~ "free meals",
+                            meals2 == 2 ~ "reduced price meals",
+                            meals2 == 3 ~ "both free and reduced price meals")) %>%
+  # status2 value label
+  mutate(status2 = case_when(status2 == 0 ~ "refused second interview",
+                             status2 == 1 ~ "answered 2nd interview",
+                             status2 == 2 ~ "closed for renovations",
+                             status2 == 3 ~ "closed permanently",
+                             status2 == 4 ~ "closed for highway construction",
+                             status2 == 5 ~ "closed due to Mall fire")) %>%
+  mutate(co_owned = if_else(co_owned == 1, "yes", "no")) %>%
+  mutate(bonus = if_else(bonus == 1, "yes", "no")) %>%
+  mutate(special2 = if_else(special2 == 1, "yes", "no")) %>%
+  mutate(type2 = if_else(type2 == 1, "phone", "personal")) %>%
+  select(-southj, -centralj, -northj, -shore, -pa1, -pa2) %>% # now included in region dummy
+  mutate(date2 = lubridate::mdy(date2)) %>% # Convert date
+  rename(open2 = open2r) %>% #Fit name to wave 1
+  rename(firstinc2 = firstin2) %>% # Fit name to wave 1
+  sjlabelled::set_label(variable_labels) # Add stored variable labels
+```
+
+#### Transposed data
+
+The dataset is currently in a *wide format*, i.e. there are separate columns for variables of each wave of the survey. First, I am separating the contents in different objects and then *stack* both waves on top of each other. The functions `bind_cols()` and `bind_rows()` from R package `dplyr` are very helpful here.
+
+```{r, echo=T, eval=F}
+# Structural variables
+structure <- data_mod %>%
+  select(sheet, chain, co_owned, state, region)
+
+# Wave 1 variables
+wave1 <- data_mod %>%
+  select(-ends_with("2"), - names(structure)) %>%
+  mutate(observation = "February 1992") %>%
+  bind_cols(structure) 
+
+# Wave 2 variables
+wave2 <- data_mod %>%
+  select(ends_with("2")) %>%
+  rename_all(~str_remove(., "2"))  %>%
+  mutate(observation = "November 1992") %>%
+  bind_cols(structure) 
+
+# Final dataset
+card_krueger_1994 <- bind_rows(wave1, wave2) %>%
+  select(sort(names(.))) %>% # Sort columns alphabetically
+  sjlabelled::copy_labels(data_mod) # Restore variable labels
+```
+
+#### Final data
+
+Finaly, I am generating a variable that measures employment. According to the paper, the *full-time equivalents (FTE)* consist of full-time employees, managers and part-time employees (`emptot`). The latter are multiplied by factor 0.5 before entering the calculation. Also, I am generating the share of full-time employees of all FTE (`pct_ftw`). 
+
+```{r}
+card_krueger_1994_mod <- card_krueger_1994 %>%
+  mutate(emptot = empft + nmgrs + 0.5 * emppt,
+         pct_fte = empft / emptot * 100)
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+******
+
+### 3.2 Descriptive statistics  {.tabset .tabset-fade .tabset-pills}
+
+#### Distribution of restaurants
+
+Table 2 in the paper shows extensive descriptive statistics of the dataset. Some of them are replicated in this section, in order to show that reading and processing the data was not prone to errors. At first, I calculate the distribution of fast food chains in `NJ` and `PA`. The function `prop.table()` creates the relative shares of each fast food chain within each state.
+
+```{r}
+card_krueger_1994_mod %>%
+  select(chain, state) %>%
+  table() %>%
+  prop.table(margin = 2)  %>%
+  apply(MARGIN = 2,
+        FUN = scales::percent_format(accuracy = 0.1)) %>%
+  noquote
+```
+
+#### Pre-treatment means
+
+Next, I am adding the mean values of certain variables of the first wave of the survey grouped by each state ...
+
+```{r}
+card_krueger_1994_mod %>%
+  filter(observation == "February 1992") %>%
+  group_by(state) %>%
+  summarise(emptot = mean(emptot, na.rm = TRUE),
+            pct_fte  = mean(pct_fte, na.rm = TRUE),
+            wage_st = mean(wage_st, na.rm = TRUE),
+            hrsopen = mean(hrsopen, na.rm = TRUE)) %>%
+  pivot_longer(cols=-state, names_to = "variable") %>%
+  pivot_wider(names_from = state, values_from = value)
+```
+
+#### Post-treatment means
+
+... as well as the mean values of the second wave of the survey. My calculations are in line with  the numbers published in the paper - phew!
+
+```{r}
+card_krueger_1994_mod %>%
+  filter(observation == "November 1992") %>%
+  group_by(state) %>%
+  summarise(emptot = mean(emptot, na.rm = TRUE),
+            pct_fte  = mean(pct_fte, na.rm = TRUE),
+            wage_st = mean(wage_st, na.rm = TRUE),
+            hrsopen = mean(hrsopen, na.rm = TRUE)) %>%
+  pivot_longer(cols=-state, names_to = "variable") %>%
+  pivot_wider(names_from = state, values_from = value)
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+******
+
+### 3.3 Figure 1 
+
+In this section I am redproducing figure 1 of the study. The authors created this figure with *SAS* and it shows the distribution of the fast food restaurants' wages grouped by the federal states `NJ` and `PA` before and after the treatment. I am using the function `geom_histogram()` from R package `ggplot2` to create a histogram. To show the percentage of stores within each state on the y-axis, the `aes` argument of the histogram has to be manipulated here. With function `ggarrange()` from R package `ggpubr` I am combining both histograms into a single plot with a single legend.
+
+```{r}
+hist.feb <- card_krueger_1994_mod %>%
+  filter(observation == "February 1992") %>%
+  ggplot(aes(wage_st, fill = state)) +
+  geom_histogram(aes(y=c(..count..[..group..==1]/sum(..count..[..group..==1]),
+                         ..count..[..group..==2]/sum(..count..[..group..==2]))*100),
+                 alpha=0.5, position = "dodge", bins = 23) +
+  labs(title = "February 1992", x = "Wage range", y = "Percent of stores", fill = "") +
+  scale_fill_grey()
+
+hist.nov <- card_krueger_1994_mod %>%
+  filter(observation == "November 1992") %>%
+  ggplot(aes(wage_st, fill = state)) +
+  geom_histogram(aes(y=c(..count..[..group..==1]/sum(..count..[..group..==1]),
+                         ..count..[..group..==2]/sum(..count..[..group..==2]))*100),
+                 alpha = 0.5, position = "dodge", bins = 23) +
+  labs(title = "November 1992", x="Wage range", y = "Percent of stores", fill="") +
+  scale_fill_grey()
+
+ggarrange(hist.feb, hist.nov, ncol = 2, 
+          common.legend = TRUE, legend = "bottom")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+******
+
+### 3.4 Calculating the treatment effect {.tabset .tabset-fade .tabset-pills}
+
+#### First differences
+
+Before calculating the DiD estimator with OLS, I want to deduce it by means of differencing the mean values of employment (`emptot`) between each group. This is easily done with functions `group_by()` and `summarise()`. We obtain four groups with distinct mean values!
+
+```{r}
+differences <- card_krueger_1994_mod %>%
+  group_by(observation, state) %>%
+  summarise(emptot = mean(emptot, na.rm = TRUE))
+
+# Treatment group (NJ) before treatment
+njfeb <- differences[1,3]
+
+# Control group (PA) before treatment
+pafeb <- differences[2,3]
+
+# Treatment group (NJ) after treatment
+njnov <- differences[3,3]
+
+# Control group (PA) after treatment
+panov <- differences[4,3]
+
+```
+
+#### ATT
+
+The Average Treatment Effect (ATT) in this setting can be determined in two ways:
+
+* calculate the difference between the difference of November and February within NJ and PA
+
+```{r}
+(njnov-njfeb)-(panov-pafeb) 
+``` 
+
+* calculate the difference between the difference of NJ and PA within November and February 
+
+```{r}
+(njnov-panov)-(njfeb-pafeb)
+```
+
+This number can be found in row 3 of table 3 in the paper!
+
+#### Digression: counterfactual outcome
+
+Representing the relationship between treatment and control group graphically can be very helpful in order to understand the DiD approach. First, I use the `differences` of variable `emptot` calculated in the previous step for NJ and PJ in February and November. Additionally, we require the outcome of `NJ` if the treatment (raise of the minimum wage) did *not* happen. This is called the **counterfactual outcome** (`nj_counterfactual`). The DiD assumption states that the trends of treatment and control group are identical until the treatment takes place. Hence, without the treatment the employment (`emptot`) of NJ would decline from February to November by the same amount as PA. Since I want to make a graph for this effect I am adding three additional data points to depict an intervention line in the plot which indicates the treatment event.
+
+```{r}
+# Calculate counterfactual outcome
+nj_counterfactual <- tibble(
+  observation = c("February 1992","November 1992"), 
+  state = c("New Jersey (Counterfactual)","New Jersey (Counterfactual)"),
+  emptot = as.numeric(c(njfeb, njfeb-(pafeb-panov)))
+  ) 
+
+# Data points for treatment event
+intervention <- tibble(
+    observation = c("Intervention", "Intervention", "Intervention"),
+    state = c("New Jersey", "Pennsylvania", "New Jersey (Counterfactual)"),
+    emptot = c(19.35, 22.3, 19.35)
+  ) 
+
+# Combine data
+did_plotdata <- bind_rows(differences, 
+                          nj_counterfactual, 
+                          intervention)
+```
+
+#### Line Plot
+
+I am creating a line plot with function `geom_line()` from R package `ggplot2` to illustrate the DiD approach. In November 1992, the distance between the actual and counterfactual employment (`emptot`) of NJ identifies the causal effect of an increase in minimum wages on employment. Note the use of function `geom_label_repel` from R package `ggrepel` here, to align the labels of each line.
+
+```{r}
+did_plotdata %>%
+  mutate(label = if_else(observation == "November 1992", as.character(state), NA_character_)) %>%
+  ggplot(aes(x=observation,y=emptot, group=state)) +
+  geom_line(aes(color=state), size=1.2) +
+  geom_vline(xintercept = "Intervention", linetype="dotted", 
+             color = "black", size=1.1) + 
+  scale_color_brewer(palette = "Accent") +
+  scale_y_continuous(limits = c(17,24)) +
+  ggrepel::geom_label_repel(aes(label = label),
+                   nudge_x = 0.5, nudge_y = -0.5,
+                   na.rm = TRUE) +
+  guides(color=FALSE) +
+  labs(x="", y="FTE Employment (mean)") +
+  annotate(
+    "text",
+    x = "November 1992",
+    y = 19.6,
+    label = "{Difference-in-Differences}",
+    angle = 90,
+    size = 3
+  )
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+******
+
+### 3.5 Calculating the DiD estimator {.tabset .tabset-fade .tabset-pills}
+
+#### Dummy variable creation
+
+With linear regression, this result can be achieved very easy. At first, we need to create two dummy variables. One indicates the start of the treatment (`time`) and is equal to zero before the treatment and equal to one after the treatment. The other variable separates the observations into a treatment and control group (`treated`). This dummy variable is equal to one for fast food restaurants located in NJ and equal to zero for fast food restaurants located in PA. 
+
+```{r}
+card_krueger_1994_mod <- mutate(card_krueger_1994_mod,
+                                time = ifelse(observation == "November 1992", 1, 0),
+                                treated = ifelse(state == "New Jersey", 1, 0)
+                                )
+```
+
+#### Estimation via lm()
+
+The DiD estimator is an interaction between both dummy variables. This interaction can be specified with the `:` operator in the formula of function `lm()` in addition to the individual dummy variables.
+
+*Hint:* Another possibility is to only specify `time*treated` in the formula which adds the individual dummy variables automatically.
+
+```{r did_reg}
+did_model <- lm(emptot ~ time + treated + time:treated, data = card_krueger_1994_mod)
+summary(did_model)
+```
+
+The coefficient of `time:treated` is the difference-in-differences estimator. The treatment (raise of the minimum wage) leads on average to an increase of employment (`emptot`) in NJ by **2.75 FTE**.
+
+#### Fixed Effects
+
+Row 4 of table 3 in the study shows a more precise calculation of the DiD estimator, which only includes fast food restaurants that have responses regarding employment (`emptot`) before and after the treatment (this is a so called balanced sample). In RStudio we can get this result by computing a `fixed effects model` which is sometimes also called a `within estimator`. I am using R package `plm` to run this regression with function `plm()` and argument `model = "within"`. Beforehand, the data has to be declared as a *panel* with function `p.dataframe()`. With variable `sheet` each fast food restaurant can be uniquely identified. Additionally, we need the function `coeftest()` from R package `lmtest` in order to obtain the correct standard errors which must be clustered by `sheet`.
+
+```{r}
+# Declare as panel data
+panel <- pdata.frame(card_krueger_1994_mod, "sheet")
+
+# Within model
+did.reg <- plm(emptot ~ time + treated + time:treated, 
+               data = panel, model = "within")
+
+# obtain clustered standard errors
+coeftest(did.reg, vcov = function(x) 
+  vcovHC(x, cluster = "group", type = "HC1"))
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+******
+
+## References
