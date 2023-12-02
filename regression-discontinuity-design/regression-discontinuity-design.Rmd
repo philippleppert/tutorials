@@ -1,0 +1,346 @@
+---
+title: "R Tutorial: Regression Discontinuity Design"
+subtitle: "Replicating the @carpenter_dobkin_2009 study"
+author: 
+  - name: "Philipp Leppert"
+date: "25.09.2020"
+output: 
+  html_document:
+    anchor_sections: false
+    highlight: default
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    #code_folding: hide
+bibliography: references.bib 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, fig.align = "center")
+
+# Pakete Layout
+library(klippy)
+library(details)
+
+# Pakete Analyse
+library(dplyr)
+library(ggplot2)
+library(rddtools)
+library(magrittr)
+
+# ggplot theme
+theme_set(theme_bw())
+```
+
+```{r klippy, echo=FALSE, include=TRUE}
+klippy::klippy()
+```
+
+<style>
+#TOC {
+  background:  url('https://raw.githubusercontent.com/philippleppert/rpubs/main/RDD.png');
+  background-size: 180px 180px;
+  padding-top: 180px !important;
+  background-repeat: no-repeat;
+  background-position: center top;
+}
+</style>
+
+*****
+
+Reading time: `r format(ceiling(wordcountaddin::word_count()/200), nsmall=0)` minutes (`r format(wordcountaddin::word_count(), nsmall=0, big.mark=",")` words)
+
+*****
+
+## 1. Introduction
+
+Without a random process that separates the treatment and control group, the treatment effect can be identified if the assignment to the treatment group follows a regression discontinuity design (RDD). This requires a (running) variable which, at a certain threshold, separates the observations into a treatment and control group.  
+
+*****
+
+## 2. Theory
+
+There are two different variants of the RDD:
+
+* sharp RDD: 
+  + the threshold separates the treatment and control group exactly
+
+* fuzzy RDD:
+  + the threshold influences the probability of being treated
+  + this is in fact an instrumental variable approach (estimating a LATE)
+
+The value of the outomce (Y) for individuals just below the threshold is the missing conterfactual outcome. It increases continuously with the cutoff variable, as opposed to the treatment.
+
+### 2.1 Estimation methods
+
+Three methods to estimate a RDD can be distinguished:
+
+* Method 1: 
+
+  + select a subsample for which the value of the running variable is close to the threshold
+  + problem: the smaller the sample, the larger the standard errors
+
+* Method 2:
+
+  + select a larger sample and estimate parametrically
+  + problem: this depends on the functional form and polynomials
+  
+* Method 3:
+
+  + select a subsample close to the threshold and estimate parametrically
+  + extension: different functional forms on the left and right side of the cutoff
+
+*****
+
+### 2.2 Advantage of RDD
+
+With an RDD approach some assumptions can be tested. Individuals close to the threshold are nearly identical, except for characteristics which are affected by the treatment. Prior to the treatment, the outcome should not differ between the treatment and control group. The distribution of the variable which indicates the threshold should have no jumps around this cutoff value.
+
+*****
+
+## 3. Replication
+
+I am now replicating a study from @carpenter_dobkin_2009. The data of their study is available [here](https://www.aeaweb.org/articles?id=10.1257/app.1.1.164){target="_blank"}. They are estimating the effect of alcohol consumption on mortality by utilising the minimum drinking age within a regression discontinuity design.
+
+Below I included a list of the required R packages for this tutorial.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(rddtools)
+library(magrittr)
+```
+
+### 3.1 The dataset {.tabset .tabset-fade .tabset-pills}
+
+At first, I am reading the data with RStudio. The dataset contains aggregated values according to the respondents' age.
+
+#### Read Data
+
+```{r}
+carpenter_dobkin_2009 <- readRDS("carpenter_dobkin_2009.rds")
+```
+
+#### Scatterplot
+
+Now, let us take a look at the threshold (= the minimum drinking age), which occurs at 21 years. There is a noticeable jump in the mortality rate after 21 years!
+
+```{r}
+carpenter_dobkin_2009 %>% 
+  ggplot(aes(x = agecell, y = all)) + 
+  geom_point() +
+  geom_vline(xintercept = 21, color = "red", size = 1, linetype = "dashed") + 
+  annotate("text", x = 20.4, y = 105, label = "Minimum Drinking Age",
+           size=4) +
+  labs(y = "Mortality rate (per 100.000)",
+       x = "Age (binned)")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+*****
+
+### 3.2 Estimation: same slopes {.tabset .tabset-fade .tabset-pills}
+
+The RDD can be estimated by OLS. The first regression applies the same slopes on both sides of the cutoff. 
+
+#### Model
+
+At first, we have to compute a dummy variable (`threshold`), indicating whether an indidivual is below or above the cutoff. The dummy is equal to zero for observations below and equal to one for observations aboev the cutoff of 21 years. Then I am specifiying a linear model with function `lm()` to regress all deaths per 100.000 (`all`) on the `threshold` dummy and the respondents' `age` which is centered around the threshold value of `age` (21 years). This is done with function `I()` by substracting the cutoff from each age bin.
+
+```{r}
+lm_same_slope <- carpenter_dobkin_2009 %>% 
+  mutate(threshold = ifelse(agecell >= 21, 1, 0)) %$% 
+  lm(all ~ threshold + I(agecell - 21))
+
+summary(lm_same_slope) 
+```
+
+#### Model via rddtools
+
+There is an alternative approach by using R package `rddtools` which contains various functions related to applying the RDD. Within function `rdd_reg_lm()` I am using the argument `slope = "same"` to achieve the same result with the previous approach.
+
+```{r alternativ1}
+rdd_data(y = carpenter_dobkin_2009$all, 
+         x = carpenter_dobkin_2009$agecell, 
+         cutpoint = 21) %>% 
+  rdd_reg_lm(slope = "same") %>% 
+  summary()
+```
+
+#### Scatterplot
+
+With a scatterplot I draw the fitted line of the regression, which shows the same slope at both sides of the threshold.
+
+```{r}
+carpenter_dobkin_2009 %>%
+  select(agecell, all) %>%
+  mutate(threshold = as.factor(ifelse(agecell >= 21, 1, 0))) %>%
+  ggplot(aes(x = agecell, y = all)) +
+  geom_point(aes(color = threshold)) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_brewer(palette = "Accent") +
+  guides(color = FALSE) +
+  geom_vline(xintercept = 21, color = "red",
+    size = 1, linetype = "dashed") +
+  labs(y = "Mortality rate (per 100.000)",
+       x = "Age (binned)")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+The coefficient of the dummy avariable `threshold` is the average treatment effect. On average, the mortality rate per 100.000 for individuals reaching the minimum drinking age is **`r format(round(lm_same_slope$coefficients[2],2), nsmall=2)`** points higher.
+
+*****
+
+### 3.3 Estimation: different slopes {.tabset .tabset-fade .tabset-pills}
+
+The second regression applies different slopes on both sides of the cutoff.
+
+#### Model
+
+With function `lm()` this can be achieved by specifying an interaction between the `threshold` dummy and `age` which is centered around the cutoff value.
+
+```{r}
+lm_different_slope <- carpenter_dobkin_2009 %>%
+  mutate(threshold = ifelse(agecell >= 21, 1, 0)) %$%
+  lm(all ~ threshold + I(agecell - 21) + threshold:I(agecell - 21))
+
+summary(lm_different_slope)
+```
+
+#### Model via rddtools
+
+Again, we can use R package `rddtools` to get the job done. Now, the argument `slope = "separate"` has to be used inside function `rdd_reg_lm()`.
+
+```{r}
+rdd_data(y = carpenter_dobkin_2009$all, 
+         x = carpenter_dobkin_2009$agecell, 
+         cutpoint = 21) %>% 
+  rdd_reg_lm(slope = "separate") %>% 
+  summary()
+```
+
+#### Scatterplot
+
+Let us take at the different slopes with a scatterplot. The slope on the right side of the cutoff is negative while it is positive on the left side.
+
+```{r}
+carpenter_dobkin_2009 %>%
+  select(agecell, all) %>%
+  mutate(threshold = as.factor(ifelse(agecell >= 21, 1, 0))) %>%
+  ggplot(aes(x = agecell, y = all, color = threshold)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_brewer(palette = "Accent") +
+  guides(color = FALSE) +
+  geom_vline(xintercept = 21, color = "red",
+    size = 1, linetype = "dashed") +
+  labs(y = "Mortality rate (per 100.000)",
+       x = "Age (binned)")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+This approach does not alter the interpretation of the treatment effect! On average, the mortality rate per 100.000 for individuals reaching the minimum drinking age is **`r format(round(lm_different_slope$coefficients[2],2), nsmall=2)`** points higher.
+
+*****
+
+### 3.4 Modifying the functional form {.tabset .tabset-fade .tabset-pills}
+
+Particular attentions should be paid to the specification of the functional form when applying a RDD.
+
+#### Model
+
+Below, I am modelling a quadratic relationship between `age` and the mortality per 100.000 (`all`). The quadratic term enters the formula via function `I()`. As in the previous section, different slopes around the cutoff are used.
+
+```{r rquadratic}
+lm_quadratic <- carpenter_dobkin_2009 %>% 
+mutate(threshold = ifelse(agecell >= 21, 1, 0)) %$% 
+  lm(all ~ threshold + I(agecell - 21) + I((agecell -21)^2) + threshold:I(agecell - 21) +
+       threshold:I((agecell - 21)^2))
+
+summary(lm_quadratic)
+```
+
+#### Model via rddtools
+
+In function `rdd_reg_lm()` I have to modify the argument `order =` to specify a quadratic term (which is a second order polynomial). It is quite easy to use higher order polynomials with package `rddtools` compared to the traditional approach with function `lm()`.
+
+```{r}
+rdd_data(y = carpenter_dobkin_2009$all, 
+         x = carpenter_dobkin_2009$agecell, 
+         cutpoint = 21) %>% 
+  rdd_reg_lm(slope = "separate", order = 2) %>% 
+  summary()
+```
+
+#### Scatterplot
+
+On the right side of the cutoff, this model seems to fit the data better!
+
+```{r}
+carpenter_dobkin_2009 %>%
+  select(agecell, all) %>%
+  mutate(threshold = as.factor(ifelse(agecell >= 21, 1, 0))) %>%
+  ggplot(aes(x = agecell, y = all, color = threshold)) +
+  geom_point() +
+  geom_smooth(method = "lm",
+              formula = y ~ x + I(x ^ 2),
+              se = FALSE) +
+  scale_color_brewer(palette = "Accent") +
+  guides(color = FALSE) +
+  geom_vline(xintercept = 21, color = "red",
+    size = 1, linetype = "dashed") +
+  labs(y = "Mortality rate (per 100.000)",
+       x = "Age (binned)")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+On average, the mortality rate per 100.000 for individuals reaching the minimum drinking age is now **`r format(round(lm_quadratic$coefficients[2],2), nsmall=2)`** points higher.
+
+*****
+
+### 3.5 Sensitivity analysis {.tabset .tabset-fade .tabset-pills}
+
+Futhermore, it is advisable to check the sensitivity of the results with respect to limiting the sample size. 
+
+#### Model
+
+Instead of using the full range of `age`, I am only using respondents aged between 20 and 22 years. Also, I am removing the quadratic term.
+
+```{r}
+lm_sensitivity <- carpenter_dobkin_2009 %>%
+  filter(agecell >= 20 & agecell <= 22) %>%
+  mutate(threshold = ifelse(agecell >= 21, 1, 0)) %$%
+  lm(all ~ threshold + I(agecell - 21) + threshold:I(agecell - 21))
+
+summary(lm_sensitivity)
+```
+
+#### Scatterplot
+
+```{r}
+carpenter_dobkin_2009 %>%
+  filter(agecell >= 20 & agecell <= 22) %>%
+  select(agecell, all) %>%
+  mutate(threshold = as.factor(ifelse(agecell >= 21, 1, 0))) %>%
+  ggplot(aes(x = agecell, y = all, color = threshold)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_brewer(palette = "Accent") +
+  guides(color = FALSE) +
+  geom_vline(xintercept = 21, color = "red",
+             size = 1, linetype = "dashed") +
+  labs(y = "Mortality rate (per 100.000)",
+       x = "Age (binned)")
+```
+
+### {.unlisted .unnumbered .toc-ignore}
+
+This result is pretty similar to the previous approach with the quadratic approach. On average, the mortality rate per 100.000 for individuals reaching the minimum drinking age is **`r format(round(lm_sensitivity$coefficients[2],2), nsmall=2)`** points higher.
+
+*****
+
+## References
