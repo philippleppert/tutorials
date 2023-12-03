@@ -48,7 +48,7 @@ klippy::klippy()
 
 <style>
 #TOC {
-  background:  url('https://raw.githubusercontent.com/philippleppert/rpubs/main/DiD.png');
+  background:  url('https://raw.githubusercontent.com/philippleppert/tutorials/main/general/stickers/DiD.png');
   background-size: 180px 180px;
   padding-top: 180px !important;
   background-repeat: no-repeat;
