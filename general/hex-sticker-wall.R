@@ -141,7 +141,7 @@ hexwall <- function(path, sticker_row_size = 16, sticker_width = 500, remove_sma
   }
 }
 
-path <- "general/stickers/"
+path <- "general/stickers_tidyverse/"
 list.files(path)
 
 hexwall(path, sticker_row_size = 3, sticker_width = 110)
